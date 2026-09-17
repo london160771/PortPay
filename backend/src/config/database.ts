@@ -3,9 +3,9 @@ export const databaseConfig = {
   connectionString: process.env.DATABASE_URL?.trim() || '',
   supabaseUrl: process.env.SUPABASE_URL?.trim() || '',
   supabaseAnonKey: process.env.SUPABASE_ANON_KEY?.trim() || '',
+  supabaseServiceRoleKey: process.env.SUPABASE_SERVICE_ROLE_KEY?.trim() || '',
 };
 
 export const isDatabaseConfigured = Boolean(
-  databaseConfig.connectionString ||
-    (databaseConfig.supabaseUrl && databaseConfig.supabaseAnonKey),
+  databaseConfig.supabaseUrl && databaseConfig.supabaseServiceRoleKey,
 );

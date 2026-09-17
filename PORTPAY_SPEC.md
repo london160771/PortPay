@@ -331,10 +331,13 @@ Only one phase may be active at a time. Phase names below are canonical.
 - Add read-only frontend balance support for `DemoAAPL` and testnet `USD₮0`.
 - Do not implement settlement, invoices, checkout, receipts, history, Smart Spend, `DemoNVDA`, or Builder Codes in this phase.
 
-### Phase 2 — Checkout
+### Phase 2 — Merchant Invoice Flow
 
-- Implement the merchant invoice/payment-link flow.
-- Implement buyer checkout and manual `DemoAAPL` payment.
+- Implement the merchant dashboard and wallet-aware invoice/payment-link flow.
+- Persist invoice metadata in Supabase/Postgres with reproducible migrations.
+- Support `pending` and `paid` invoice status display without fabricating onchain payment state.
+- Buyer checkout and manual `DemoAAPL` payment are a follow-on Phase 2 slice and are intentionally not part of this implementation request.
+- Do not start Phase 3 until the remaining Phase 2 checkout slice is separately implemented and approved.
 
 ### Phase 3 — Core Settlement
 

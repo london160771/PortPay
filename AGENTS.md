@@ -208,10 +208,13 @@ Do not perform an optional mainnet test until the user explicitly approves it af
 - Add read-only frontend balance support for `DemoAAPL` and testnet `USD₮0`.
 - Do not implement settlement, invoices, checkout, receipts, history, Smart Spend, `DemoNVDA`, or Builder Codes in this phase.
 
-### Phase 2 — Checkout
+### Phase 2 — Merchant Invoice Flow
 
-- Merchant invoice/payment link.
-- Buyer checkout and manual `DemoAAPL` payment.
+- Merchant dashboard and wallet-aware invoice creation.
+- Persist invoice metadata in Supabase/Postgres and expose a unique shareable payment link.
+- Show pending/paid invoice status and a clean invoice detail/waiting screen.
+- Buyer checkout and manual `DemoAAPL` payment are a follow-on Phase 2 slice and are intentionally not part of this implementation request.
+- Do not start Phase 3 until the remaining Phase 2 checkout slice is separately implemented and approved.
 
 ### Phase 3 — Core Settlement
 
