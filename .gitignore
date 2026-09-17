@@ -1,0 +1,31 @@
+# Dependencies
+node_modules/
+
+# Build output
+frontend/dist/
+backend/dist/
+contracts/out/
+contracts/cache/
+contracts/broadcast/
+
+# Local environment files (keep examples committed)
+.env
+.env.*
+!.env.example
+frontend/.env
+frontend/.env.*
+!frontend/.env.example
+backend/.env
+backend/.env.*
+!backend/.env.example
+
+# Test and tooling output
+coverage/
+.vite/
+.turbo/
+
+# Editors and operating systems
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/

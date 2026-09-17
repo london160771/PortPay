@@ -1,0 +1,300 @@
+# PortPay Agent Instructions
+
+This file is the execution and repository-workflow authority for PortPay. Read it together with `PORTPAY_SPEC.md` before changing the project. Both files are source of truth throughout the build.
+
+**Repository:** <https://github.com/london160771/PortPay>  
+**Product:** PortPay — Spend your portfolio. Merchants get stablecoins.  
+**Primary network:** X Layer Testnet, chain ID `1952`  
+**Optional future network:** X Layer Mainnet, chain ID `196`
+
+## 1. Non-negotiable workflow
+
+### One phase at a time
+
+Codex must work on exactly one named phase from `PORTPAY_SPEC.md` at a time. Do not start the next phase while the current phase is awaiting review or approval. Do not bundle unrelated cleanup, speculative features, or future mainnet work into the active phase.
+
+Before implementation, identify the active phase and its acceptance criteria. If the requested work conflicts with the spec, stop and update both source-of-truth files first; never resolve a conflict by silently changing architecture or scope.
+
+### Required phase-completion report
+
+When the active phase is complete, Codex must report all of the following in plain language:
+
+- files changed;
+- tests added and tests run, including results or failures;
+- manual demo steps and whether they passed;
+- environment/configuration changes;
+- deployed contracts and addresses, or an explicit statement that none were deployed;
+- transaction hashes/explorer links when a chain transaction was performed;
+- README and source-of-truth updates;
+- known limitations, risks, and deferred work;
+- which GPT-5.6 Sol High checkpoint applies, if any;
+- the exact next phase, without starting it.
+
+After that report, Codex must wait for the user’s approval.
+
+### Approval gate for Git
+
+Codex must **never commit or push before the user approves the completed phase**. A general earlier approval, a request to “keep going,” or approval to implement does not count as approval to commit/push that phase.
+
+The only valid order is:
+
+```text
+complete one phase
+→ report files/tests/manual demo/config/addresses/limitations
+→ wait for explicit user approval
+→ commit that phase
+→ push that phase
+→ report the commit/push result
+```
+
+No automatic commit, no automatic push, and no “checkpoint commit” before approval. If approval is not given, leave the work uncommitted and do not push it. Do not use destructive Git commands to hide or discard user work.
+
+## 2. README policy
+
+`README.md` must be created in **Phase 0** and kept current throughout the build.
+
+Update it in the same phase whenever any of the following changes:
+
+- setup or run instructions;
+- architecture or data flow;
+- features or user flow;
+- environment variables;
+- contract addresses, token addresses, chain IDs, or Builder Code configuration;
+- testnet/mainnet status;
+- demo steps or judge path;
+- known limitations, security assumptions, or unsupported behavior.
+
+The README must never claim that DemoAAPL/DemoNVDA are real stocks, that testnet settlement is an OKX DEX swap, or that mainnet proof exists when it does not.
+
+## 3. Canonical names and terminology
+
+Use these exact names everywhere:
+
+- `PortPay` — product and repository.
+- `PortPaySettlement` — testnet settlement contract.
+- `TestnetSettlementAdapter` — testnet adapter.
+- `OKXDEXMainnetAdapter` — optional future mainnet adapter.
+- `DemoAAPL` — first demo ERC-20.
+- `DemoNVDA` — second demo ERC-20 for Smart Spend.
+- `USD₮0` — official X Layer Testnet settlement stablecoin.
+- `Smart Spend` — deterministic portfolio-aware asset recommendation.
+- `Smart Payment History` — history/receipt feature.
+- `Builder Codes` — OKX/X Layer transaction attribution.
+
+`PortfolioPay` is an obsolete early working name. Do not add it to new code, identifiers, UI, docs, screenshots, commit messages, or README text. If it is found in an existing file, normalize it to `PortPay` unless the file is an external historical artifact.
+
+Do not call the X Layer Testnet prefunded-contract flow a “DEX swap.” Use **portfolio settlement** or **testnet simulated RWA conversion**. Reserve “OKX DEX swap” for the optional `OKXDEXMainnetAdapter` path.
+
+## 4. Features that must not be omitted
+
+The MVP is not complete if any of these are missing:
+
+- merchant creates an invoice;
+- merchant receives a shareable payment link;
+- buyer checkout opens from that link;
+- buyer pays with `DemoAAPL` on X Layer Testnet;
+- merchant receives official testnet `USD₮0`;
+- payment receipt includes what was spent, what was received, and the X Layer transaction;
+- Smart Payment History records the payment and relevant reason/status metadata;
+- Smart Spend recommends between portfolio assets using deterministic allocation rules;
+- `DemoNVDA` is added for the Smart Spend phase, after core settlement;
+- OKX/X Layer Builder Codes are attached to eligible PortPay-generated transactions;
+- the two-tab merchant/buyer demo works;
+- `TestnetSettlementAdapter` is the testnet path;
+- `OKXDEXMainnetAdapter` remains the named future upgrade path;
+- an optional tiny mainnet proof remains possible later but is not a testnet prerequisite;
+- README and both source-of-truth documents remain current.
+
+## 5. Architecture guardrails
+
+- Start on X Layer Testnet (`1952`) with test OKB gas and official testnet `USD₮0`.
+- Deploy only the small demo ERC-20 assets needed: `DemoAAPL` first, `DemoNVDA` later.
+- Use React + Vite, `wagmi` + `viem`, a small Node.js + Express + TypeScript backend, and Supabase/Postgres behind a repository/data-access boundary as described in the spec.
+- Keep invoice metadata, product names, demo prices, status indexing, and searchable history offchain; keep ownership, settlement, payment, and compact receipt events onchain.
+- Do not build a full AMM, oracle, marketplace, token, DAO, multi-chain system, trading bot, or unnecessary AI layer.
+- Smart Spend must be deterministic and explainable for the MVP. It is not financial advice.
+- Demo reference prices must be labeled as demo values, not market prices.
+- Read and test token decimals; never assume all assets use the same decimal precision.
+- The settlement contract must prevent duplicate invoice settlement, validate expiry and participants, and fail atomically.
+- Never put private keys, seed phrases, populated `.env` files, or API secrets in the repository.
+- Never make mainnet funds or mainnet API credentials a hidden dependency of the testnet flow.
+
+## 6. Builder Codes rules
+
+Builder Codes are a required integration.
+
+- Use the current official OKX/X Layer registration and encoding instructions.
+- Attach the registered PortPay attribution in the app’s eligible transaction-building path; do not rely on wallet auto-injection.
+- Use the current ERC-8021 mechanism where applicable.
+- Keep environment-specific Builder Code configuration out of committed secrets and document the active non-secret configuration in the README.
+- Verify the attribution on testnet and preserve evidence in the phase report.
+- Do not mark Builder Codes complete based only on a UI label or an unverified placeholder.
+
+## 7. Testing requirements
+
+Every implementation phase must have tests proportionate to its risk. At minimum, cover:
+
+- invoice creation, unique IDs, expiry, and status transitions;
+- quote binding to invoice, merchant, asset, stablecoin, amounts, chain, settlement contract, and expiry;
+- ERC-20 approvals, balances, and decimal conversions;
+- rounding and exact settlement amounts;
+- wrong asset, wrong merchant, invalid quote, expired quote, duplicate/replayed invoice, insufficient balance, insufficient allowance, and failed transfer;
+- receipt event contents and history indexing;
+- Smart Spend overweight/underweight/at-target decisions, insufficient balance, missing asset, and deterministic reason text;
+- Builder Code transaction construction/attachment and manual verification evidence;
+- clean two-tab manual demo on X Layer Testnet.
+
+Do not report “working” when only a mocked frontend flow works. Distinguish clearly between unit tests, local integration tests, testnet transactions, and manual UI demonstration.
+
+## 8. Required GPT-5.6 Sol High review reminders
+
+Codex must remind the user in the phase-completion report and pause at each checkpoint below. The implementation model may be GPT-5.6 Luna Max or another configured Codex model, but these review points specifically require GPT-5.6 Sol High review.
+
+### Checkpoint A — after Phase 3 — Core Settlement
+
+After Phase 3 — Core Settlement, before core settlement is treated as finished. Ask for/recommend review of:
+
+- `PortPaySettlement` behavior;
+- quote/price trust and expiry;
+- ERC-20 decimals and rounding;
+- approvals and transfer ordering;
+- merchant authorization and invoice binding;
+- replay/duplicate protection;
+- atomic failure behavior;
+- the actual X Layer Testnet transaction and receipt.
+
+### Checkpoint B — after Builder Codes integration
+
+After Phase 6, before Builder Codes are treated as complete. Review:
+
+- registration/configuration;
+- ERC-8021/current encoding;
+- app-side transaction attachment;
+- wallet behavior;
+- coverage of every eligible PortPay-generated transaction;
+- attribution evidence and README documentation.
+
+### Checkpoint C — before final submission or any mainnet test
+
+After Phase 7 and before final submission, and again before any optional mainnet transaction if needed. Review:
+
+- complete user flow and demo claims;
+- contract and adapter boundaries;
+- test coverage and known limitations;
+- Builder Codes;
+- environment/address documentation;
+- security assumptions and wallet handling;
+- separation between testnet proof and optional mainnet proof.
+
+Do not perform an optional mainnet test until the user explicitly approves it after this review. A mainnet test is never implied by approval of testnet work.
+
+## 9. Phase execution checklist
+
+### Phase 0 — Foundation
+
+- Establish frontend/backend/contracts/test structure.
+- Configure X Layer Testnet.
+- Scaffold Supabase/Postgres configuration without adding unnecessary application schema.
+- Create `README.md`.
+- Document initial setup, architecture, env vars, demo plan, and limitations.
+- Do not deploy mainnet assets or require mainnet credentials.
+
+### Phase 1 — DemoAAPL and settlement foundation
+
+- Implement/deploy `DemoAAPL`.
+- Implement/deploy and test `PortPaySettlement`.
+- Configure/fund official testnet `USD₮0` settlement.
+- Record addresses in README and env example.
+
+### Phase 2 — Checkout
+
+- Merchant invoice/payment link.
+- Buyer checkout and manual `DemoAAPL` payment.
+
+### Phase 3 — Core Settlement
+
+- `TestnetSettlementAdapter`.
+- Confirm one real testnet payment and merchant receipt.
+- Stop for GPT-5.6 Sol High review reminder.
+
+### Phase 4 — Receipts/history
+
+- Confirmation polling/status.
+- Buyer/merchant receipt.
+- Smart Payment History and explorer link.
+- Re-run two-tab demo.
+
+### Phase 5 — Smart Spend
+
+- Add `DemoNVDA`.
+- Implement deterministic allocation recommendation.
+- Show reason and allow manual or Smart Pay selection.
+
+### Phase 6 — Builder Codes
+
+- Integrate and verify OKX/X Layer Builder Codes.
+- Document configuration/evidence.
+- Stop for GPT-5.6 Sol High review reminder.
+
+### Phase 7 — Polish/submission
+
+- Polish the clean fintech UI.
+- Make testnet/demo limitations prominent.
+- Update README, `PORTPAY_SPEC.md`, and `AGENTS.md` for all material changes.
+- Prepare the two-tab judge demo and final evidence.
+- Stop for GPT-5.6 Sol High review before final submission or any mainnet test.
+
+### Optional Phase 8 — tiny mainnet proof
+
+- Only with explicit user approval, available funds, verified official xStock route, and completed pre-mainnet Sol High review.
+- Use `OKXDEXMainnetAdapter`.
+- Keep it tiny and separately documented.
+- Do not let it replace or weaken the testnet demo.
+
+## 10. Phase report template
+
+Use this structure when a phase is complete:
+
+```text
+Phase completed: <name>
+
+Files changed:
+- ...
+
+Tests:
+- <command/test> — PASS/FAIL
+
+Manual demo:
+- <steps> — PASS/FAIL
+
+Environment/configuration:
+- ...
+
+Contracts and addresses:
+- ...
+
+Transactions/evidence:
+- ...
+
+README/source-of-truth updates:
+- ...
+
+Known limitations:
+- ...
+
+Required GPT-5.6 Sol High review:
+- <REQUIRED / NOT YET REQUIRED>
+- Review focus: ...
+
+Next phase:
+- <name only; do not start it before approval>
+
+Approval required:
+Please approve this completed phase before I commit and push it.
+```
+
+The final line is operational, not optional. Wait for explicit approval, then commit and push only the approved phase.
+
+## 11. Change-control rule
+
+If a requested change affects a locked feature, canonical name, contract responsibility, adapter, network strategy, Builder Codes requirement, README policy, review checkpoint, or non-goal, update both `PORTPAY_SPEC.md` and `AGENTS.md` before implementation. Do not leave contradictory instructions in place.
