@@ -16,7 +16,7 @@ app.get('/health', (_request, response) => {
   response.json({
     service: 'PortPay backend',
     status: 'ok',
-    phase: 'Phase 0 — Foundation',
+    phase: 'Phase 1 — Wallet + Demo Assets',
     network: {
       name: xLayerTestnet.name,
       chainId: xLayerTestnet.chainId,

@@ -199,12 +199,14 @@ Do not perform an optional mainnet test until the user explicitly approves it af
 - Document initial setup, architecture, env vars, demo plan, and limitations.
 - Do not deploy mainnet assets or require mainnet credentials.
 
-### Phase 1 — DemoAAPL and settlement foundation
+### Phase 1 — Wallet + Demo Assets
 
-- Implement/deploy `DemoAAPL`.
-- Implement/deploy and test `PortPaySettlement`.
-- Configure/fund official testnet `USD₮0` settlement.
-- Record addresses in README and env example.
+- Finish the OKX Wallet connection experience and wrong-network handling on X Layer Testnet.
+- Implement and test `DemoAAPL` as a clearly labeled ordinary demo ERC-20 test asset; never present it as an official xStock or real Apple-backed security.
+- Prepare reproducible X Layer Testnet deployment and minting scripts for `DemoAAPL`.
+- Verify the official X Layer Testnet `USD₮0` address against current OKX documentation before using it in runtime configuration.
+- Add read-only frontend balance support for `DemoAAPL` and testnet `USD₮0`.
+- Do not implement settlement, invoices, checkout, receipts, history, Smart Spend, `DemoNVDA`, or Builder Codes in this phase.
 
 ### Phase 2 — Checkout
 
@@ -213,6 +215,8 @@ Do not perform an optional mainnet test until the user explicitly approves it af
 
 ### Phase 3 — Core Settlement
 
+- Implement/deploy and test `PortPaySettlement` for the smallest safe testnet settlement flow.
+- Configure/fund official testnet `USD₮0` settlement.
 - `TestnetSettlementAdapter`.
 - Confirm one real testnet payment and merchant receipt.
 - Stop for GPT-5.6 Sol High review reminder.

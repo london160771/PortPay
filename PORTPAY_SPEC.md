@@ -38,7 +38,8 @@ The following are required features, not optional ideas:
 
 ### Asset progression
 
-- **Phase 1/core settlement:** deploy one ordinary EVM ERC-20 demo asset named `DemoAAPL`.
+- **Phase 1 — Wallet + Demo Assets:** prepare one ordinary EVM ERC-20 demo asset named `DemoAAPL` and the wallet/balance foundation needed to use it later.
+- **Phase 3 — Core Settlement:** implement the smallest safe `PortPaySettlement` flow around the configured demo asset and official testnet `USD₮0`.
 - **Smart Spend phase:** add a second ordinary EVM ERC-20 demo asset named `DemoNVDA` so a recommendation has a meaningful choice.
 - **Do not initially create:** `DemoSPY`, a large asset catalog, official testnet xStocks, or a liquidity pool.
 - `DemoAAPL` and `DemoNVDA` are clearly labeled demo assets and must never be presented as backed by Apple or NVIDIA shares.
@@ -321,13 +322,14 @@ Only one phase may be active at a time. Phase names below are canonical.
 - Create `README.md` in this phase.
 - Put setup, architecture, initial feature scope, environment variables, current addresses (if any), demo outline, and known limitations in the README.
 
-### Phase 1 — DemoAAPL and testnet settlement foundation
+### Phase 1 — Wallet + Demo Assets
 
-- Implement/deploy `DemoAAPL`.
-- Implement/deploy `PortPaySettlement` for the smallest safe settlement flow.
-- Configure official testnet `USD₮0` and test OKB.
-- Fund the settlement contract with testnet `USD₮0`.
-- Add contract/unit/integration tests for amount math, decimals, approvals, permissions, expiry, replay protection, and atomic failure.
+- Finish the OKX Wallet connection experience and wrong-network handling on X Layer Testnet.
+- Implement and test `DemoAAPL` as a clearly labeled ordinary EVM ERC-20 demo asset; never present it as an official xStock or real Apple-backed security.
+- Prepare reproducible X Layer Testnet deployment and minting scripts for `DemoAAPL`.
+- Verify the official X Layer Testnet `USD₮0` address against current OKX documentation before using it in runtime configuration.
+- Add read-only frontend balance support for `DemoAAPL` and testnet `USD₮0`.
+- Do not implement settlement, invoices, checkout, receipts, history, Smart Spend, `DemoNVDA`, or Builder Codes in this phase.
 
 ### Phase 2 — Checkout
 
@@ -336,6 +338,9 @@ Only one phase may be active at a time. Phase names below are canonical.
 
 ### Phase 3 — Core Settlement
 
+- Implement/deploy and test `PortPaySettlement` for the smallest safe settlement flow.
+- Configure official testnet `USD₮0` and test OKB.
+- Fund the settlement contract with testnet `USD₮0`.
 - Wire `TestnetSettlementAdapter`.
 - Complete one real X Layer Testnet settlement and merchant receipt.
 
