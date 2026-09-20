@@ -27,8 +27,12 @@ export function validateInvoiceId(value: unknown): string {
 }
 
 export function validateMerchantAddress(value: unknown): string {
+  return validateWalletAddress(value, 'Merchant wallet');
+}
+
+export function validateWalletAddress(value: unknown, label = 'Wallet'): string {
   if (typeof value !== 'string' || !WALLET_ADDRESS_PATTERN.test(value.trim())) {
-    throw new InvoiceValidationError('Merchant wallet address must be a valid EVM address.');
+    throw new InvoiceValidationError(`${label} address must be a valid EVM address.`);
   }
 
   return value.trim().toLowerCase();

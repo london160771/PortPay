@@ -40,6 +40,22 @@ export class InMemoryInvoiceRepository implements InvoiceRepository {
       .sort((left, right) => right.createdAt.localeCompare(left.createdAt));
   }
 
+  async listPaidByMerchant(merchantAddress: string): Promise<Invoice[]> {
+    return sortPaidInvoices(
+      [...this.invoices.values()].filter(
+        (invoice) => invoice.status === 'paid' && invoice.merchantAddress === merchantAddress,
+      ),
+    );
+  }
+
+  async listPaidByBuyer(buyerAddress: string): Promise<Invoice[]> {
+    return sortPaidInvoices(
+      [...this.invoices.values()].filter(
+        (invoice) => invoice.status === 'paid' && invoice.buyerAddress === buyerAddress,
+      ),
+    );
+  }
+
   async markPaid(id: string, evidence: PaymentEvidence): Promise<Invoice | null> {
     const invoice = this.invoices.get(id);
     if (!invoice || invoice.status !== 'pending') return null;
@@ -123,6 +139,26 @@ export class SupabaseInvoiceRepository implements InvoiceRepository {
     return ((data ?? []) as InvoiceRow[]).map(mapInvoiceRow);
   }
 
+  async listPaidByMerchant(merchantAddress: string): Promise<Invoice[]> {
+    return this.listPaidByAddress('merchant_address', merchantAddress);
+  }
+
+  async listPaidByBuyer(buyerAddress: string): Promise<Invoice[]> {
+    return this.listPaidByAddress('buyer_address', buyerAddress);
+  }
+
+  private async listPaidByAddress(column: 'merchant_address' | 'buyer_address', address: string): Promise<Invoice[]> {
+    const { data, error } = await this.client
+      .from('invoices')
+      .select('*')
+      .eq(column, address)
+      .eq('status', 'paid')
+      .order('paid_at', { ascending: false });
+
+    if (error) throw new InvoicePersistenceError();
+    return ((data ?? []) as InvoiceRow[]).map(mapInvoiceRow).filter((invoice) => invoice.status === 'paid');
+  }
+
   async markPaid(id: string, evidence: PaymentEvidence): Promise<Invoice | null> {
     const { data, error } = await this.client
       .from('invoices')
@@ -184,9 +220,25 @@ class UnconfiguredInvoiceRepository implements InvoiceRepository {
     throw new DatabaseNotConfiguredError();
   }
 
+  async listPaidByMerchant(): Promise<Invoice[]> {
+    throw new DatabaseNotConfiguredError();
+  }
+
+  async listPaidByBuyer(): Promise<Invoice[]> {
+    throw new DatabaseNotConfiguredError();
+  }
+
   async markPaid(): Promise<Invoice | null> {
     throw new DatabaseNotConfiguredError();
   }
+}
+
+function sortPaidInvoices(invoices: Invoice[]): Invoice[] {
+  return invoices.sort((left, right) => {
+    const leftDate = left.paidAt ?? left.updatedAt;
+    const rightDate = right.paidAt ?? right.updatedAt;
+    return rightDate.localeCompare(leftDate);
+  });
 }
 
 export function createInvoiceRepository(): InvoiceRepository {

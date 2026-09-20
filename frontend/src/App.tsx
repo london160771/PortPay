@@ -13,8 +13,10 @@ import {
   ApiError,
   createInvoice as createInvoiceRequest,
   createSettlementQuote,
+  getBuyerPaymentHistory,
   getInvoice,
   getMerchantInvoices,
+  getMerchantPaymentHistory,
   reconcileInvoicePayment,
   type Invoice,
   type SettlementQuote,
@@ -22,6 +24,14 @@ import {
 import { erc20BalanceAbi, formatTokenBalance, parseConfiguredAddress, testnetAssets } from './config/assets';
 import { portPayNetworkConfig, xLayerTestnet } from './config/network';
 import { invoiceStatusLabel, readInvoiceRoute, type InvoiceRoute } from './config/invoice';
+import {
+  formatPaymentTimestamp,
+  formatReceivedAmount,
+  formatSpentAmount,
+  getExplorerTransactionUrl,
+  hasVerifiedPaymentEvidence,
+  isOfficialSettlementAsset,
+} from './config/history';
 import { needsApproval, validatePaymentQuote } from './config/payment';
 import { portPaySettlementAbi, type SettlementWriteQuote } from './config/settlement';
 import { getWalletNetworkState, shortenAddress } from './config/wallet';
@@ -97,10 +107,10 @@ function WalletPanel() {
     <section className="rounded-[2rem] border border-ink/10 bg-ink p-6 text-white shadow-soft sm:p-8">
       <div className="flex flex-col gap-5 sm:flex-row sm:items-start sm:justify-between">
         <div>
-          <p className="text-xs font-semibold uppercase tracking-[0.18em] text-mint/75">Merchant wallet</p>
+          <p className="text-xs font-semibold uppercase tracking-[0.18em] text-mint/75">Dashboard wallet</p>
           <h2 className="mt-2 text-2xl font-semibold tracking-tight">OKX Wallet · X Layer Testnet</h2>
           <p className="mt-2 max-w-xl text-sm leading-6 text-white/60">
-            Connect the merchant wallet to create invoices and view its invoices. PortPay accepts invoice creation only on chain ID 1952.
+            Connect a wallet to create merchant invoices and view its persisted payment history. PortPay accepts invoice creation only on chain ID 1952.
           </p>
         </div>
         <span
@@ -152,7 +162,7 @@ function WalletPanel() {
       ) : (
         <div className="mt-7 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
           <div>
-            <p className="text-sm font-semibold text-mint">Connected to X Layer Testnet</p>
+            <p className="text-sm font-semibold text-mint">Wallet connected to X Layer Testnet</p>
             <p className="mt-1 font-mono text-sm text-white/60">{shortenAddress(address!)}</p>
           </div>
           <button
@@ -307,6 +317,137 @@ function InvoiceStatusPill({ status }: { status: Invoice['status'] }) {
   );
 }
 
+function PaymentHistoryPanel({
+  address,
+  canRead,
+  onOpenInvoice,
+}: {
+  address: Address | undefined;
+  canRead: boolean;
+  onOpenInvoice: (invoiceId: string) => void;
+}) {
+  const [view, setView] = useState<'buyer' | 'merchant'>('merchant');
+  const [payments, setPayments] = useState<Invoice[]>([]);
+  const [isLoading, setIsLoading] = useState(false);
+  const [loadError, setLoadError] = useState('');
+
+  useEffect(() => {
+    let active = true;
+    if (!canRead || !address) {
+      setPayments([]);
+      setLoadError('');
+      return () => {
+        active = false;
+      };
+    }
+
+    setIsLoading(true);
+    setLoadError('');
+    const loadHistory = view === 'merchant' ? getMerchantPaymentHistory(address) : getBuyerPaymentHistory(address);
+    loadHistory
+      .then((result) => {
+        if (active) setPayments(result.payments.filter((payment) => payment.status === 'paid'));
+      })
+      .catch((error: unknown) => {
+        if (active) setLoadError(error instanceof ApiError ? error.message : 'Unable to load payment history.');
+      })
+      .finally(() => {
+        if (active) setIsLoading(false);
+      });
+
+    return () => {
+      active = false;
+    };
+  }, [address, canRead, view]);
+
+  return (
+    <section className="rounded-3xl border border-ink/10 bg-white p-6 shadow-sm sm:p-7">
+      <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+        <div>
+          <p className="text-xs font-semibold uppercase tracking-[0.16em] text-ink/45">Smart Payment History</p>
+          <h2 className="mt-2 text-2xl font-semibold tracking-tight">
+            {view === 'merchant' ? 'What this wallet received' : 'What this wallet spent'}
+          </h2>
+          <p className="mt-2 max-w-2xl text-sm leading-6 text-ink/55">
+            Confirmed payments only, loaded from persisted settlement evidence. Pending invoices never appear here.
+          </p>
+        </div>
+        <div className="flex rounded-xl bg-cloud p-1 text-xs font-semibold">
+          <button
+            type="button"
+            className={`rounded-lg px-3 py-2 transition ${view === 'merchant' ? 'bg-ink text-white' : 'text-ink/55 hover:text-ink'}`}
+            onClick={() => setView('merchant')}
+          >
+            Merchant view
+          </button>
+          <button
+            type="button"
+            className={`rounded-lg px-3 py-2 transition ${view === 'buyer' ? 'bg-ink text-white' : 'text-ink/55 hover:text-ink'}`}
+            onClick={() => setView('buyer')}
+          >
+            Buyer view
+          </button>
+        </div>
+      </div>
+
+      {isLoading ? <p className="mt-7 rounded-2xl bg-cloud p-5 text-sm text-ink/55">Loading confirmed payment history…</p> : null}
+      {loadError ? <p className="mt-7 rounded-xl bg-rose-50 px-4 py-3 text-sm text-rose-700">{loadError}</p> : null}
+      {!canRead || !address ? (
+        <p className="mt-7 rounded-2xl bg-cloud p-5 text-sm leading-6 text-ink/55">
+          Connect a wallet on X Layer Testnet to load its payment history.
+        </p>
+      ) : null}
+      {canRead && address && !isLoading && !loadError && payments.length === 0 ? (
+        <p className="mt-7 rounded-2xl bg-cloud p-5 text-sm leading-6 text-ink/55">
+          No confirmed payments for this wallet yet.
+        </p>
+      ) : null}
+
+      {payments.length > 0 ? (
+        <div className="mt-7 space-y-3">
+          {payments.map((payment) => {
+            const explorerUrl = getExplorerTransactionUrl(payment.paymentTxHash);
+            const evidenceComplete = hasVerifiedPaymentEvidence(payment);
+            return (
+              <article key={payment.id} className="rounded-2xl border border-ink/10 bg-cloud/60 p-4 sm:p-5">
+                <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                  <button type="button" className="text-left" onClick={() => onOpenInvoice(payment.id)}>
+                    <p className="font-semibold hover:underline hover:underline-offset-4">{payment.title}</p>
+                    <p className="mt-1 text-xs text-ink/45">
+                      Paid {formatPaymentTimestamp(payment.paidAt)} · Invoice {payment.id.slice(0, 8)}…
+                    </p>
+                  </button>
+                  <InvoiceStatusPill status={payment.status} />
+                </div>
+                <div className="mt-4 grid gap-3 text-sm sm:grid-cols-2">
+                  <div>
+                    <p className="text-xs uppercase tracking-[0.12em] text-ink/40">{view === 'buyer' ? 'You spent' : 'Buyer spent'}</p>
+                    <p className="mt-1 font-semibold">{formatSpentAmount(payment)}</p>
+                  </div>
+                  <div>
+                    <p className="text-xs uppercase tracking-[0.12em] text-ink/40">{view === 'merchant' ? 'You received' : 'Merchant received'}</p>
+                    <p className="mt-1 font-semibold">{formatReceivedAmount(payment)}</p>
+                  </div>
+                </div>
+                <div className="mt-4 flex flex-col gap-2 border-t border-ink/10 pt-3 text-xs text-ink/50 sm:flex-row sm:items-center sm:justify-between">
+                  <span className="font-mono">{payment.paymentTxHash ? `${payment.paymentTxHash.slice(0, 10)}…${payment.paymentTxHash.slice(-8)}` : 'Transaction evidence unavailable'}</span>
+                  {explorerUrl ? (
+                    <a className="font-semibold text-ink underline underline-offset-4" href={explorerUrl} target="_blank" rel="noreferrer">
+                      View on X Layer Explorer
+                    </a>
+                  ) : (
+                    <span>{evidenceComplete ? 'Explorer link unavailable' : 'Onchain evidence incomplete'}</span>
+                  )}
+                </div>
+              </article>
+            );
+          })}
+        </div>
+      ) : null}
+    </section>
+  );
+}
+
 function MerchantDashboard({ onOpenInvoice }: { onOpenInvoice: (invoiceId: string) => void }) {
   const { address, chainId, isConnected } = useAccount();
   const networkState = getWalletNetworkState(isConnected, chainId);
@@ -357,7 +498,7 @@ function MerchantDashboard({ onOpenInvoice }: { onOpenInvoice: (invoiceId: strin
       <section className="py-14 sm:py-16">
         <div className="mb-5 inline-flex items-center gap-2 rounded-full bg-mint/70 px-3 py-1.5 text-sm font-semibold text-ink">
           <span className="h-2 w-2 rounded-full bg-emerald-600" />
-          Phase 3 · Core settlement
+          Phase 4 · Receipts + Smart Payment History
         </div>
         <h1 className="max-w-4xl text-5xl font-semibold leading-[1.04] tracking-[-0.06em] sm:text-7xl">
           Turn a product into a shareable payment request.
@@ -454,6 +595,8 @@ function MerchantDashboard({ onOpenInvoice }: { onOpenInvoice: (invoiceId: strin
           )}
         </section>
       </section>
+
+      <PaymentHistoryPanel address={address} canRead={canCreate} onOpenInvoice={onOpenInvoice} />
     </>
   );
 }
@@ -900,22 +1043,7 @@ function InvoiceDetailPage({ invoiceId, onBack }: { invoiceId: string; onBack: (
             {invoice.status === 'pending' ? <BuyerWalletPanel invoice={invoice} onPaid={setInvoice} /> : null}
 
             {invoice.status === 'paid' ? (
-              <div className="mt-8 rounded-2xl border border-emerald-200 bg-emerald-50 p-5">
-                <p className="text-xs font-semibold uppercase tracking-[0.14em] text-emerald-800">Settlement confirmed</p>
-                <p className="mt-3 text-sm leading-6 text-emerald-950">
-                  Buyer spent {invoice.spentAmount ? `${invoice.spentAmount} raw DemoAAPL units` : 'DemoAAPL'} and the merchant received exactly {invoice.amountUsdt0} USD₮0.
-                </p>
-                {invoice.paymentTxHash ? (
-                  <a
-                    className="mt-4 inline-block text-sm font-semibold text-emerald-800 underline underline-offset-4"
-                    href={`${portPayNetworkConfig.explorerUrl}/tx/${invoice.paymentTxHash}`}
-                    target="_blank"
-                    rel="noreferrer"
-                  >
-                    View confirmed transaction on X Layer Explorer
-                  </a>
-                ) : null}
-              </div>
+              <PaymentReceipt invoice={invoice} />
             ) : null}
 
             <dl className="mt-8 space-y-4 border-t border-ink/10 pt-6 text-sm">
@@ -939,6 +1067,85 @@ function InvoiceDetailPage({ invoiceId, onBack }: { invoiceId: string; onBack: (
   );
 }
 
+function PaymentReceipt({ invoice }: { invoice: Invoice }) {
+  const explorerUrl = getExplorerTransactionUrl(invoice.paymentTxHash);
+  const evidenceComplete = hasVerifiedPaymentEvidence(invoice);
+
+  return (
+    <section className="mt-8 rounded-2xl border border-emerald-200 bg-emerald-50 p-5 sm:p-6">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <p className="text-xs font-semibold uppercase tracking-[0.14em] text-emerald-800">Payment receipt</p>
+          <h2 className="mt-2 text-2xl font-semibold tracking-tight text-emerald-950">Settlement confirmed</h2>
+        </div>
+        <InvoiceStatusPill status={invoice.status} />
+      </div>
+
+      <p className="mt-4 text-sm leading-6 text-emerald-950">
+        This receipt is built from the confirmed settlement evidence persisted by PortPay. It is not a market-price statement or a DEX swap receipt.
+      </p>
+
+      <dl className="mt-6 grid gap-x-6 gap-y-4 border-t border-emerald-900/10 pt-5 text-sm sm:grid-cols-2">
+        <div>
+          <dt className="text-emerald-900/55">Invoice</dt>
+          <dd className="mt-1 font-semibold text-emerald-950">{invoice.title}</dd>
+          <dd className="mt-1 break-all font-mono text-xs text-emerald-900/65">{invoice.id}</dd>
+        </div>
+        <div>
+          <dt className="text-emerald-900/55">Status</dt>
+          <dd className="mt-1 font-semibold text-emerald-950">{invoiceStatusLabel(invoice.status)}</dd>
+        </div>
+        <div>
+          <dt className="text-emerald-900/55">Buyer</dt>
+          <dd className="mt-1 break-all font-mono text-xs text-emerald-950">{invoice.buyerAddress ?? 'Unavailable'}</dd>
+        </div>
+        <div>
+          <dt className="text-emerald-900/55">Merchant</dt>
+          <dd className="mt-1 break-all font-mono text-xs text-emerald-950">{invoice.merchantAddress}</dd>
+        </div>
+        <div>
+          <dt className="text-emerald-900/55">Asset spent</dt>
+          <dd className="mt-1 font-semibold text-emerald-950">{formatSpentAmount(invoice)}</dd>
+        </div>
+        <div>
+          <dt className="text-emerald-900/55">Settlement asset</dt>
+          <dd className="mt-1 font-semibold text-emerald-950">
+            USD₮0{isOfficialSettlementAsset(portPayNetworkConfig.stablecoinAddress) ? ' · official X Layer Testnet token' : ''}
+          </dd>
+        </div>
+        <div>
+          <dt className="text-emerald-900/55">Merchant received</dt>
+          <dd className="mt-1 font-semibold text-emerald-950">{formatReceivedAmount(invoice)}</dd>
+        </div>
+        <div>
+          <dt className="text-emerald-900/55">Confirmed timestamp</dt>
+          <dd className="mt-1 font-semibold text-emerald-950">{formatPaymentTimestamp(invoice.paidAt)}</dd>
+        </div>
+      </dl>
+
+      <div className="mt-6 border-t border-emerald-900/10 pt-5 text-sm">
+        <p className="text-emerald-900/55">Settlement transaction</p>
+        {invoice.paymentTxHash ? (
+          <p className="mt-1 break-all font-mono text-xs text-emerald-950">{invoice.paymentTxHash}</p>
+        ) : (
+          <p className="mt-1 text-emerald-950">Transaction evidence unavailable.</p>
+        )}
+        {explorerUrl ? (
+          <a className="mt-3 inline-block font-semibold text-emerald-800 underline underline-offset-4" href={explorerUrl} target="_blank" rel="noreferrer">
+            View confirmed transaction on X Layer Explorer
+          </a>
+        ) : null}
+        {!evidenceComplete ? (
+          <p className="mt-3 rounded-xl border border-amber-300 bg-amber-50 px-3 py-2 text-xs leading-5 text-amber-900">
+            Some canonical settlement evidence is missing from this record. PortPay will not invent the missing transaction details.
+          </p>
+        ) : null}
+        {invoice.settlementBlockNumber ? <p className="mt-3 text-xs text-emerald-900/65">Settlement block: {invoice.settlementBlockNumber}</p> : null}
+      </div>
+    </section>
+  );
+}
+
 function AppShell({ children }: { children: React.ReactNode }) {
   return (
     <main className="min-h-screen overflow-hidden bg-cloud text-ink">
@@ -957,7 +1164,7 @@ function AppShell({ children }: { children: React.ReactNode }) {
 
         <footer className="flex flex-col gap-2 border-t border-ink/10 py-5 text-sm text-ink/45 sm:flex-row sm:items-center sm:justify-between">
           <span>PortPay · X Layer Testnet</span>
-          <span>Phase 3 testnet settlement · DemoAAPL only.</span>
+          <span>Phase 4 receipts + Smart Payment History · DemoAAPL only.</span>
         </footer>
       </div>
     </main>

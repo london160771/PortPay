@@ -7,6 +7,7 @@ import type { SettlementAdapter } from '../settlement/types.js';
 
 const MERCHANT = '0x1111111111111111111111111111111111111111';
 const OTHER_MERCHANT = '0x2222222222222222222222222222222222222222';
+const BUYER = '0x3333333333333333333333333333333333333333';
 
 async function withServer<T>(app: ReturnType<typeof createApp>, callback: (baseUrl: string) => Promise<T>) {
   const server = createServer(app);
@@ -198,6 +199,59 @@ describe('merchant invoice API', () => {
         body: JSON.stringify({ txHash: '0xabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcd', buyerAddress: buyer }),
       });
       expect(duplicateResponse.status).toBe(409);
+    });
+  });
+
+  it('returns paid-only buyer and merchant history with settlement evidence', async () => {
+    const repository = new InMemoryInvoiceRepository();
+    const paidInvoice: Invoice = {
+      id: '00000000-0000-4000-8000-000000000002',
+      title: 'Phase 4 receipt test',
+      amountUsdt0: '1',
+      merchantAddress: MERCHANT,
+      paymentUrl: 'http://localhost:5173/invoice/00000000-0000-4000-8000-000000000002',
+      status: 'paid',
+      createdAt: '2026-09-17T00:00:00.000Z',
+      updatedAt: '2026-09-17T00:05:00.000Z',
+      paymentTxHash: '0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef',
+      paidAt: '2026-09-17T00:05:00.000Z',
+      buyerAddress: BUYER,
+      spentAsset: '0x4444444444444444444444444444444444444444',
+      spentAmount: '4000000000000000',
+      stablecoinReceived: '1',
+      quoteId: '0x5555555555555555555555555555555555555555555555555555555555555555',
+      settlementContract: '0x6666666666666666666666666666666666666666',
+      settlementBlockNumber: '42',
+    };
+    const pendingInvoice: Invoice = {
+      ...paidInvoice,
+      id: '00000000-0000-4000-8000-000000000003',
+      title: 'Still waiting',
+      status: 'pending',
+      paymentUrl: 'http://localhost:5173/invoice/00000000-0000-4000-8000-000000000003',
+      paymentTxHash: undefined,
+      paidAt: undefined,
+    };
+    await repository.create(paidInvoice);
+    await repository.create(pendingInvoice);
+
+    await withServer(createApp(repository), async (baseUrl) => {
+      const merchantResponse = await fetch(`${baseUrl}/api/history/merchant?merchantAddress=${MERCHANT}`);
+      const merchantHistory = (await merchantResponse.json()) as { payments: Invoice[] };
+      expect(merchantResponse.status).toBe(200);
+      expect(merchantHistory.payments.map((payment) => payment.id)).toEqual([paidInvoice.id]);
+      expect(merchantHistory.payments[0].paymentTxHash).toBe(paidInvoice.paymentTxHash);
+
+      const buyerResponse = await fetch(`${baseUrl}/api/history/buyer?buyerAddress=${BUYER}`);
+      const buyerHistory = (await buyerResponse.json()) as { payments: Invoice[] };
+      expect(buyerResponse.status).toBe(200);
+      expect(buyerHistory.payments).toHaveLength(1);
+      expect(buyerHistory.payments[0].stablecoinReceived).toBe('1');
+
+      const invalidResponse = await fetch(`${baseUrl}/api/history/buyer?buyerAddress=bad`);
+      expect(invalidResponse.status).toBe(400);
+      const missingResponse = await fetch(`${baseUrl}/api/history/merchant`);
+      expect(missingResponse.status).toBe(400);
     });
   });
 });

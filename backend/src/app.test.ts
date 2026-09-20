@@ -2,8 +2,8 @@ import { describe, expect, it } from 'vitest';
 import { createApp } from './app.js';
 import { InMemoryInvoiceRepository } from './invoices/repository.js';
 
-describe('backend Phase 3 routes', () => {
-  it('exposes health, invoice, quote, and reconciliation routes without adding later-phase routes', () => {
+describe('backend Phase 4 routes', () => {
+  it('exposes receipt/history routes alongside the existing invoice and settlement routes', () => {
     const app = createApp(new InMemoryInvoiceRepository());
     const expressApp = app as unknown as {
       _router?: { stack?: Array<{ route?: { path?: string } }> };
@@ -16,6 +16,7 @@ describe('backend Phase 3 routes', () => {
     expect(paths).toContain('/api/invoices/:invoiceId');
     expect(paths).toContain('/api/invoices/:invoiceId/quote');
     expect(paths).toContain('/api/invoices/:invoiceId/reconcile');
-    expect(paths).not.toContain('/history');
+    expect(paths).toContain('/api/history/merchant');
+    expect(paths).toContain('/api/history/buyer');
   });
 });

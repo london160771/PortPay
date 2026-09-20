@@ -6,9 +6,9 @@ PortPay is a payment-layer foundation for paying with tokenized portfolio assets
 
 ## Current project status
 
-**Phase 3 — Core Settlement: implementation and first live X Layer Testnet proof complete. Phase 4 has not started.**
+**Phase 4 — Receipts + Smart Payment History: implementation complete and awaiting approval. Phase 5 has not started.**
 
-The repository now contains independent frontend, backend, and Foundry contract workspaces, an OKX Wallet-aware merchant dashboard, Supabase/Postgres-backed invoice persistence, unique shareable invoice links, a DemoAAPL buyer checkout, signed short-lived settlement quotes, the `PortPaySettlement` contract, and verified-event invoice reconciliation. No mainnet functionality is required or configured.
+The repository now contains independent frontend, backend, and Foundry contract workspaces, an OKX Wallet-aware merchant dashboard, Supabase/Postgres-backed invoice persistence, unique shareable invoice links, a DemoAAPL buyer checkout, signed short-lived settlement quotes, the `PortPaySettlement` contract, verified-event invoice reconciliation, transaction-backed payment receipts, and paid-only Smart Payment History for buyer and merchant views. No mainnet functionality is required or configured.
 
 Frontend, backend, and Foundry verification pass locally. Foundry was run from the repository's bundled Windows release in the ignored `contracts/.tools/foundry` directory, so WSL is not required.
 
@@ -54,7 +54,8 @@ Express API (backend/)
   ├── merchant invoice API and validation
   ├── Supabase/Postgres invoice repository
   ├── `TestnetSettlementAdapter` quote signing
-  └── canonical, confirmed settlement-event reconciliation
+  ├── canonical, confirmed settlement-event reconciliation
+  └── paid-only receipt and Smart Payment History queries
 
 Foundry workspace (contracts/)
   ├── DemoAAPL ordinary test ERC-20
@@ -159,7 +160,9 @@ npm run start
 
 With OKX Wallet installed and unlocked, click **Connect OKX Wallet**, approve the connection, and use **Switch to X Layer Testnet** if the wallet is on another chain. The merchant dashboard enables invoice creation only when the connected wallet is on chain 1952. It loads that wallet's persisted invoices from the backend and keeps the Phase 1 read-only DemoAAPL/USD₮0 balance cards available.
 
-After creating an invoice, use **Copy link** to share `/invoice/<uuid>`. Opening that URL in another tab loads the buyer checkout. On X Layer Testnet, the buyer connects OKX Wallet, reviews the exact DemoAAPL/USD₮0 quote, approves only the quoted DemoAAPL amount, confirms settlement, and waits for the backend to verify the `SettlementExecuted` event. The merchant invoice becomes paid only after that evidence is reconciled.
+After creating an invoice, use **Copy link** to share `/invoice/<uuid>`. Opening that URL in another tab loads the buyer checkout. On X Layer Testnet, the buyer connects OKX Wallet, reviews the exact DemoAAPL/USD₮0 quote, approves only the quoted DemoAAPL amount, confirms settlement, and waits for the backend to verify the `SettlementExecuted` event. The merchant invoice becomes paid only after that evidence is reconciled. A paid invoice then renders a receipt with the invoice, participants, asset amounts, confirmed timestamp, transaction hash, settlement block, and X Layer Explorer link.
+
+From the dashboard, **Smart Payment History** has separate merchant and buyer views. Merchant view emphasizes USD₮0 received; buyer view emphasizes DemoAAPL spent. Both views load only `paid` records from persisted Supabase settlement evidence, show the related invoice and timestamp, and link to the verified transaction when its hash is valid. The existing Phase 3 live payment appears in both views when the corresponding merchant or buyer wallet is connected.
 
 ### Backend
 
@@ -182,15 +185,17 @@ npm run build
 npm run start
 ```
 
-The backend exposes the health route, Phase 2 invoice API, and Phase 3 settlement API:
+The backend exposes the health route, invoice API, Phase 3 settlement API, and Phase 4 receipt/history queries:
 
 - `POST /api/invoices` with `{ "title", "amountUsdt0", "merchantAddress" }` creates a pending invoice.
 - `GET /api/invoices?merchantAddress=<wallet>` lists invoices for the connected merchant wallet.
 - `GET /api/invoices/<uuid>` resolves the shareable invoice link target.
 - `POST /api/invoices/<uuid>/quote` issues a short-lived EIP-712 quote bound to the invoice, buyer, merchant, assets, exact amounts, chain, settlement contract, and expiry.
 - `POST /api/invoices/<uuid>/reconcile` checks the canonical receipt block and configured confirmation depth, verifies the structured settlement event, and changes the invoice to `paid`.
+- `GET /api/history/merchant?merchantAddress=<wallet>` returns paid invoices whose persisted merchant matches the wallet.
+- `GET /api/history/buyer?buyerAddress=<wallet>` returns paid invoices whose persisted buyer matches the wallet.
 
-The API validates titles, positive USD₮0 amounts with up to 6 decimals, EVM wallet addresses, UUIDs, and transaction hashes. It returns a clear unavailable response when Supabase/Postgres or the quote signer/contract configuration is not ready. It never marks an invoice paid from client input alone; the reconciliation endpoint requires a successful X Layer Testnet receipt sent to the configured settlement contract with one matching `SettlementExecuted` event.
+The API validates titles, positive USD₮0 amounts with up to 6 decimals, EVM wallet addresses, UUIDs, and transaction hashes. It returns a clear unavailable response when Supabase/Postgres or the quote signer/contract configuration is not ready. It never marks an invoice paid from client input alone; the reconciliation endpoint requires a successful X Layer Testnet receipt sent to the configured settlement contract with one matching `SettlementExecuted` event. History endpoints filter to `paid` server-side, so pending invoices and client-supplied fake payment records are excluded.
 
 ### Contracts
 
@@ -240,7 +245,7 @@ Run `forge` directly if it is installed on PATH. These scripts reject non-1952 d
 
 No workspace depends on a hidden mainnet credential or mainnet transaction.
 
-## Phase 3 verification
+## Phase 4 verification
 
 Expected checks from a clean checkout:
 
@@ -250,13 +255,13 @@ cd ../backend; npm install; npm run lint; npm run typecheck; npm run test; npm r
 cd ../contracts; forge fmt --check; forge build --no-cache --use .tools/solc-0.8.24.exe; forge test --use .tools/solc-0.8.24.exe
 ```
 
-The frontend and backend can be started independently after their own install and Supabase configuration. A Phase 3 smoke check is: apply both migrations, configure the backend quote signer and deployed addresses, start the backend/frontend, create a small invoice such as `20.00 USD₮0`, open the link in a second tab, connect a funded buyer wallet, verify the quote displays `0.08 DemoAAPL` for `20 USD₮0`, approve exactly that amount (or use an existing sufficient allowance), confirm settlement, wait for invoice reconciliation, and verify the merchant record is `paid` with the transaction link. Invalid, missing, wrong-network, rejected-signature, insufficient-balance, failed-transaction, and duplicate-payment states should remain explicit. A submitted payment hash must be checked and reconciled before retrying a payment.
+The frontend and backend can be started independently after their own install and Supabase configuration. A Phase 4 smoke check is: use the recorded paid invoice or create a new small Phase 3 testnet payment, open its invoice link, confirm the paid receipt includes the invoice title/ID, buyer, merchant, DemoAAPL amount, USD₮0 amount, status, timestamp, transaction hash, and explorer link, then connect the merchant wallet and verify the payment appears in merchant history as USD₮0 received. Connect the buyer wallet in the dashboard and verify the same payment appears in buyer history as DemoAAPL spent. Confirm that pending invoices do not appear in either history. Invalid/missing invoice links and incomplete transaction evidence should remain explicit rather than producing invented hashes or links.
 
 Before broadcasting, compare the deployed `quoteSigner`, `demoAsset`, and `stablecoin` getters against the backend signer, DemoAAPL address, and official testnet USD₮0 address. The deployment script requires the official USD₮0 address; the funding script checks that the target settlement contract reports the same stablecoin. The backend rejects a non-1952 RPC, filters receipt events to the configured settlement contract, binds the receipt sender to the buyer, and requires a canonical receipt block with two confirmations by default (`SETTLEMENT_CONFIRMATION_DEPTH`). Reconciliation uses the contract-verified asset amount in the event, so changing the demo reference price after signing cannot strand a successful payment. The contract checks the buyer's exact asset debit, its exact asset receipt, and the merchant's exact stablecoin receipt; fee-on-transfer tokens revert the entire settlement.
 
 ## Known limitations and deferred work
 
-- Live Supabase/Postgres credentials and both Phase 2/3 migrations are required for any reproduction; the recorded proof used the applied migrations and live persistence.
+- Live Supabase/Postgres credentials and both Phase 2/3 migrations are required for any reproduction; the recorded proof used the applied migrations and live persistence. Phase 4 reuses the existing settlement-evidence columns; no new migration was required.
 - The recorded deployment addresses and payment evidence are for X Layer Testnet only. Deployment transaction hashes were not retained in the committed workspace; the deployed addresses and settlement configuration were verified through the live contract and receipt.
 - A quote signer private key is required server-side; it must correspond to the signer configured in the deployed settlement contract. Whoever controls that key can authorize spending the contract's prefunded USD₮0 balance through valid quotes, so use a dedicated restricted demo key and protect it as a settlement authority. Changing the signer requires a new settlement deployment.
 - DemoAAPL quote math uses the explicit `250.00 USD` reference price and rejects conversions that would silently round. This is a demo value, not market data or an oracle.
@@ -265,11 +270,11 @@ Before broadcasting, compare the deployed `quoteSigner`, `demoAsset`, and `stabl
 - The Supabase migration enables row-level security and the backend uses the server-only service-role key. No browser client or direct anon-key database access is enabled.
 - Builder Code registration and transaction attribution are not implemented or verified.
 - The public X Layer Testnet RPC may be rate limited, and wallet connection/balance reads require an installed OKX Wallet browser extension and a connected account.
-- Receipt reconciliation requires a canonical receipt block and two confirmations by default; this is a small testnet safety check, not a claim of protocol finality.
+- Receipt reconciliation requires a canonical receipt block and two confirmations by default; this is a small testnet safety check, not a claim of protocol finality. Receipt/history views are paid-only and currently load on wallet/view changes rather than through a realtime Supabase subscription.
 - A deployed `DemoAAPL` address and minted balance require a burner wallet, test OKB, and explicit local deployment commands when reproducing the proof.
 - `DemoAAPL` is a centrally minted test asset for demos and is not an official xStock or backed by Apple shares.
 - The official USD₮0 address and six-decimal metadata are verified from the current docs and a read-only testnet RPC call.
 
 ## Source-of-truth and phase discipline
 
-`AGENTS.md` defines repository workflow and approval gates. `PORTPAY_SPEC.md` defines the product, architecture, scope, and phased build plan. Only one named phase may be active at a time. Phase 3 implementation and the first live testnet proof are complete, no Phase 4 work has started, and GPT-5.6 Sol High Checkpoint A is complete.
+`AGENTS.md` defines repository workflow and approval gates. `PORTPAY_SPEC.md` defines the product, architecture, scope, and phased build plan. Only one named phase may be active at a time. Phase 3 implementation and the first live testnet proof are complete, Phase 4 receipts/history implementation is complete pending approval, and GPT-5.6 Sol High Checkpoint A is complete.

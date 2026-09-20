@@ -16,6 +16,7 @@ import {
   validateInvoiceId,
   validateMerchantAddress,
   validateTransactionHash,
+  validateWalletAddress,
 } from './invoices/validation.js';
 import { createTestnetSettlementAdapter } from './settlement/testnet.js';
 import {
@@ -42,7 +43,7 @@ export function createApp(
     response.json({
       service: 'PortPay backend',
       status: 'ok',
-      phase: 'Phase 3 — Core Settlement',
+      phase: 'Phase 4 — Receipts + Smart Payment History',
       network: {
         name: xLayerTestnet.name,
         chainId: xLayerTestnet.chainId,
@@ -68,6 +69,26 @@ export function createApp(
       const merchantAddress = validateMerchantAddress(request.query.merchantAddress);
       const invoices = await invoiceRepository.listByMerchant(merchantAddress);
       response.json({ invoices });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.get('/api/history/merchant', async (request, response, next) => {
+    try {
+      const merchantAddress = validateMerchantAddress(request.query.merchantAddress);
+      const payments = await invoiceRepository.listPaidByMerchant(merchantAddress);
+      response.json({ payments });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.get('/api/history/buyer', async (request, response, next) => {
+    try {
+      const buyerAddress = validateWalletAddress(request.query.buyerAddress, 'Buyer wallet');
+      const payments = await invoiceRepository.listPaidByBuyer(buyerAddress);
+      response.json({ payments });
     } catch (error) {
       next(error);
     }
@@ -119,7 +140,7 @@ export function createApp(
         invoice,
         {
           txHash: validateTransactionHash(request.body?.txHash),
-          buyerAddress: validateMerchantAddress(request.body?.buyerAddress) as `0x${string}`,
+          buyerAddress: validateWalletAddress(request.body?.buyerAddress, 'Buyer wallet') as `0x${string}`,
         },
       );
       response.json({ invoice: updatedInvoice });

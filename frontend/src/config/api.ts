@@ -96,6 +96,18 @@ export function getMerchantInvoices(merchantAddress: string): Promise<{ invoices
   );
 }
 
+export function getMerchantPaymentHistory(merchantAddress: string): Promise<{ payments: Invoice[] }> {
+  return request<{ payments: Invoice[] }>(
+    `/api/history/merchant?merchantAddress=${encodeURIComponent(merchantAddress)}`,
+  );
+}
+
+export function getBuyerPaymentHistory(buyerAddress: string): Promise<{ payments: Invoice[] }> {
+  return request<{ payments: Invoice[] }>(
+    `/api/history/buyer?buyerAddress=${encodeURIComponent(buyerAddress)}`,
+  );
+}
+
 export function getInvoice(invoiceId: string): Promise<{ invoice: Invoice }> {
   return request<{ invoice: Invoice }>(`/api/invoices/${encodeURIComponent(invoiceId)}`);
 }

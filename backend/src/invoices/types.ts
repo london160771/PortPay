@@ -37,5 +37,7 @@ export interface InvoiceRepository {
   create(invoice: Invoice): Promise<Invoice>;
   findById(id: string): Promise<Invoice | null>;
   listByMerchant(merchantAddress: string): Promise<Invoice[]>;
+  listPaidByMerchant(merchantAddress: string): Promise<Invoice[]>;
+  listPaidByBuyer(buyerAddress: string): Promise<Invoice[]>;
   markPaid(id: string, evidence: PaymentEvidence): Promise<Invoice | null>;
 }
