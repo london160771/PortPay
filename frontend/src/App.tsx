@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import type { Address } from 'viem';
 import {
   useAccount,
@@ -21,7 +21,7 @@ import {
   type Invoice,
   type SettlementQuote,
 } from './config/api';
-import { erc20BalanceAbi, formatTokenBalance, parseConfiguredAddress, testnetAssets } from './config/assets';
+import { erc20BalanceAbi, formatTokenBalance, parseConfiguredAddress, portfolioAssets, testnetAssets } from './config/assets';
 import { portPayNetworkConfig, xLayerTestnet } from './config/network';
 import { invoiceStatusLabel, readInvoiceRoute, type InvoiceRoute } from './config/invoice';
 import {
@@ -33,6 +33,13 @@ import {
   isOfficialSettlementAsset,
 } from './config/history';
 import { needsApproval, validatePaymentQuote } from './config/payment';
+import {
+  DEFAULT_TARGET_ALLOCATION_BPS,
+  formatAllocationPercent,
+  recommendSmartSpend,
+  type SmartSpendAssetKey,
+  type TargetAllocationBps,
+} from './config/smartSpend';
 import { portPaySettlementAbi, type SettlementWriteQuote } from './config/settlement';
 import { getWalletNetworkState, shortenAddress } from './config/wallet';
 import { okxWalletConnector } from './config/wagmi';
@@ -68,7 +75,7 @@ function TokenBalanceCard({ asset, account, canRead }: TokenBalanceCardProps) {
 
   let detail = 'Connect OKX Wallet on X Layer Testnet to read this balance.';
   if (!address) {
-    detail = 'Address not configured yet. Deploy DemoAAPL, then set VITE_DEMO_AAPL_ADDRESS.';
+    detail = `Address not configured yet. Deploy ${asset.label}, then set its VITE_* address variable.`;
   } else if (canRead && isLoading) {
     detail = 'Reading token balance and decimals…';
   } else if (canRead && readFailed) {
@@ -184,6 +191,7 @@ function WalletPanel() {
 
       <div className="mt-6 grid gap-4 lg:grid-cols-2">
         <TokenBalanceCard asset={testnetAssets.demoAapl} account={address} canRead={canReadBalances} />
+        <TokenBalanceCard asset={testnetAssets.demoNvda} account={address} canRead={canReadBalances} />
         <TokenBalanceCard asset={testnetAssets.usdt0} account={address} canRead={canReadBalances} />
       </div>
     </section>
@@ -429,6 +437,17 @@ function PaymentHistoryPanel({
                     <p className="mt-1 font-semibold">{formatReceivedAmount(payment)}</p>
                   </div>
                 </div>
+                <div className="mt-4 rounded-xl border border-ink/10 bg-white/70 p-3 text-xs leading-5 text-ink/60">
+                  {payment.smartSpendUsed ? (
+                    <>
+                      <span className="font-semibold text-ink">Smart Spend used</span>
+                      {payment.smartSpendRecommendedAsset ? ` · ${portfolioAssets[payment.smartSpendRecommendedAsset].label}` : ''}
+                      {payment.smartSpendReason ? <span className="block">{payment.smartSpendReason}</span> : null}
+                    </>
+                  ) : (
+                    <span><span className="font-semibold text-ink">Manual asset selection</span> · Smart Spend was not used.</span>
+                  )}
+                </div>
                 <div className="mt-4 flex flex-col gap-2 border-t border-ink/10 pt-3 text-xs text-ink/50 sm:flex-row sm:items-center sm:justify-between">
                   <span className="font-mono">{payment.paymentTxHash ? `${payment.paymentTxHash.slice(0, 10)}…${payment.paymentTxHash.slice(-8)}` : 'Transaction evidence unavailable'}</span>
                   {explorerUrl ? (
@@ -619,7 +638,7 @@ function displayAmount(value: string): string {
 function paymentErrorMessage(error: unknown): string {
   const message = error instanceof Error ? error.message : String(error);
   if (/reject|denied|user rejected|cancel/i.test(message)) return 'The wallet signature was rejected. No payment was completed.';
-  if (/insufficient|balance/i.test(message)) return 'This wallet does not have enough DemoAAPL or test OKB for the requested payment.';
+  if (/insufficient|balance/i.test(message)) return 'This wallet does not have enough selected demo asset or test OKB for the requested payment.';
   if (/revert|execution reverted|failed/i.test(message)) return 'The X Layer Testnet transaction was rejected. Check the balance, allowance, quote expiry, and settlement liquidity.';
   return message || 'The payment could not be completed.';
 }
@@ -637,25 +656,68 @@ function BuyerWalletPanel({
   const { writeContractAsync } = useWriteContract();
   const publicClient = usePublicClient({ chainId: xLayerTestnet.id });
   const networkState = getWalletNetworkState(isConnected, chainId);
-  const assetAddress = parseConfiguredAddress(testnetAssets.demoAapl.address);
+  const [selectedAssetKey, setSelectedAssetKey] = useState<SmartSpendAssetKey>('demoAapl');
+  const [smartSpendApplied, setSmartSpendApplied] = useState(false);
+  const [targetAllocation, setTargetAllocation] = useState<TargetAllocationBps>(DEFAULT_TARGET_ALLOCATION_BPS);
+  const assetAddress = parseConfiguredAddress(portfolioAssets[selectedAssetKey].address);
+  const demoAaplAddress = parseConfiguredAddress(portfolioAssets.demoAapl.address);
+  const demoNvdaAddress = parseConfiguredAddress(portfolioAssets.demoNvda.address);
   const stablecoinAddress = parseConfiguredAddress(testnetAssets.usdt0.address);
   const settlementAddress = parseConfiguredAddress(portPayNetworkConfig.settlementAddress);
-  const balancesEnabled = networkState === 'ready' && Boolean(address && assetAddress);
-  const { data: demoAaplBalance, isLoading: isBalanceLoading, isError: isBalanceError } = useReadContract({
-    address: assetAddress,
+  const balancesEnabled = networkState === 'ready' && Boolean(address);
+  const { data: demoAaplBalance, isLoading: isAaplBalanceLoading, isError: isAaplBalanceError } = useReadContract({
+    address: demoAaplAddress,
     abi: erc20BalanceAbi,
     functionName: 'balanceOf',
     args: address ? [address] : undefined,
     chainId: xLayerTestnet.id,
-    query: { enabled: balancesEnabled },
+    query: { enabled: balancesEnabled && Boolean(demoAaplAddress) },
   });
-  const { data: demoAaplDecimals } = useReadContract({
-    address: assetAddress,
+  const { data: demoAaplDecimals, isLoading: isAaplDecimalsLoading } = useReadContract({
+    address: demoAaplAddress,
     abi: erc20BalanceAbi,
     functionName: 'decimals',
     chainId: xLayerTestnet.id,
-    query: { enabled: balancesEnabled },
+    query: { enabled: balancesEnabled && Boolean(demoAaplAddress) },
   });
+  const { data: demoNvdaBalance, isLoading: isNvdaBalanceLoading, isError: isNvdaBalanceError } = useReadContract({
+    address: demoNvdaAddress,
+    abi: erc20BalanceAbi,
+    functionName: 'balanceOf',
+    args: address ? [address] : undefined,
+    chainId: xLayerTestnet.id,
+    query: { enabled: balancesEnabled && Boolean(demoNvdaAddress) },
+  });
+  const { data: demoNvdaDecimals, isLoading: isNvdaDecimalsLoading } = useReadContract({
+    address: demoNvdaAddress,
+    abi: erc20BalanceAbi,
+    functionName: 'decimals',
+    chainId: xLayerTestnet.id,
+    query: { enabled: balancesEnabled && Boolean(demoNvdaAddress) },
+  });
+  const { data: stablecoinDecimals, isLoading: isStablecoinDecimalsLoading } = useReadContract({
+    address: stablecoinAddress,
+    abi: erc20BalanceAbi,
+    functionName: 'decimals',
+    chainId: xLayerTestnet.id,
+    query: { enabled: balancesEnabled && Boolean(stablecoinAddress) },
+  });
+  const isBalanceLoading = isAaplBalanceLoading || isAaplDecimalsLoading || isNvdaBalanceLoading
+    || isNvdaDecimalsLoading || isStablecoinDecimalsLoading;
+  const isBalanceError = isAaplBalanceError || isNvdaBalanceError;
+  const selectedAssetBalance = selectedAssetKey === 'demoAapl' ? demoAaplBalance : demoNvdaBalance;
+  const smartSpendRecommendation = useMemo(
+    () => recommendSmartSpend(
+      [
+        { key: 'demoAapl', balance: demoAaplBalance, decimals: demoAaplDecimals },
+        { key: 'demoNvda', balance: demoNvdaBalance, decimals: demoNvdaDecimals },
+      ],
+      invoice,
+      stablecoinDecimals,
+      targetAllocation,
+    ),
+    [demoAaplBalance, demoAaplDecimals, demoNvdaBalance, demoNvdaDecimals, invoice, stablecoinDecimals, targetAllocation],
+  );
   const [quote, setQuote] = useState<SettlementQuote | null>(null);
   const [quoteLoading, setQuoteLoading] = useState(false);
   const [quoteError, setQuoteError] = useState('');
@@ -671,7 +733,8 @@ function BuyerWalletPanel({
     setPaymentError('');
     setPaymentStep('loading-quote');
     try {
-      const result = await createSettlementQuote(invoice.id, address);
+      const result = await createSettlementQuote(invoice.id, address, selectedAssetKey);
+      if (result.quote.assetKey !== selectedAssetKey) throw new Error('The backend returned a quote for a different asset.');
       setQuote(result.quote);
       setPaymentStep('idle');
     } catch (error) {
@@ -695,9 +758,10 @@ function BuyerWalletPanel({
     setQuoteError('');
     setPaymentError('');
     setPaymentStep('loading-quote');
-    createSettlementQuote(invoice.id, address)
+    createSettlementQuote(invoice.id, address, selectedAssetKey)
       .then((result) => {
         if (active) {
+          if (result.quote.assetKey !== selectedAssetKey) throw new Error('The backend returned a quote for a different asset.');
           setQuote(result.quote);
           setPaymentStep('idle');
         }
@@ -716,13 +780,44 @@ function BuyerWalletPanel({
     return () => {
       active = false;
     };
-  }, [address, invoice.id, invoice.status, networkState]);
+  }, [address, invoice.id, invoice.status, networkState, selectedAssetKey]);
+
+  function selectManualAsset(assetKey: SmartSpendAssetKey) {
+    setSelectedAssetKey(assetKey);
+    setSmartSpendApplied(false);
+    setQuote(null);
+    setQuoteError('');
+  }
+
+  function applySmartSpend() {
+    if (!smartSpendRecommendation.assetKey) return;
+    setSelectedAssetKey(smartSpendRecommendation.assetKey);
+    setSmartSpendApplied(true);
+    setQuote(null);
+    setQuoteError('');
+  }
+
+  function updateTargetAllocation(assetKey: SmartSpendAssetKey, value: string) {
+    const percentage = Number(value);
+    if (!Number.isFinite(percentage)) return;
+    setTargetAllocation((current) => ({ ...current, [assetKey]: Math.max(0, Math.min(10_000, Math.round(percentage * 100))) }));
+  }
 
   async function reconcileConfirmed(txHash: `0x${string}`) {
     if (!address) return false;
     setPaymentStep('reconciling');
     try {
-      const result = await reconcileInvoicePayment(invoice.id, { txHash, buyerAddress: address });
+      const result = await reconcileInvoicePayment(invoice.id, {
+        txHash,
+        buyerAddress: address,
+        smartSpendUsed: smartSpendApplied,
+        ...(smartSpendApplied && smartSpendRecommendation.assetKey
+          ? {
+              smartSpendRecommendedAsset: smartSpendRecommendation.assetKey,
+              smartSpendReason: smartSpendRecommendation.reason,
+            }
+          : {}),
+      });
       onPaid(result.invoice);
       setPaymentStep('paid');
       setPaymentError('');
@@ -756,14 +851,14 @@ function BuyerWalletPanel({
       setPaymentError(quoteError);
       return;
     }
-    if (demoAaplBalance === undefined) {
-      setPaymentError('DemoAAPL balance is still loading. Try again when the balance is available.');
+    if (selectedAssetBalance === undefined) {
+      setPaymentError(`${portfolioAssets[selectedAssetKey].label} balance is still loading. Try again when the balance is available.`);
       return;
     }
 
     const requiredAssetAmount = BigInt(quote.quote.assetAmount);
-    if (demoAaplBalance < requiredAssetAmount) {
-      setPaymentError(`Insufficient DemoAAPL balance. This payment needs ${displayAmount(quote.assetAmount)} DemoAAPL.`);
+    if (selectedAssetBalance < requiredAssetAmount) {
+      setPaymentError(`Insufficient ${portfolioAssets[selectedAssetKey].label} balance. This payment needs ${displayAmount(quote.assetAmount)} ${portfolioAssets[selectedAssetKey].label}.`);
       return;
     }
 
@@ -787,7 +882,7 @@ function BuyerWalletPanel({
         });
         setPaymentStep('confirming-approval');
         const approvalReceipt = await publicClient.waitForTransactionReceipt({ hash: approvalHash });
-        if (approvalReceipt.status !== 'success') throw new Error('The DemoAAPL approval transaction failed.');
+        if (approvalReceipt.status !== 'success') throw new Error(`The ${portfolioAssets[selectedAssetKey].label} approval transaction failed.`);
       }
       if (validatePaymentQuote(quote, address, assetAddress, stablecoinAddress, settlementAddress)) {
         setPaymentStep('error');
@@ -847,16 +942,17 @@ function BuyerWalletPanel({
     }
   }
 
-  const hasEnoughDemoAapl = quote && demoAaplBalance !== undefined && demoAaplBalance >= BigInt(quote.quote.assetAmount);
-  const formattedBuyerBalance = formatTokenBalance(demoAaplBalance, demoAaplDecimals);
+  const hasEnoughSelectedAsset = quote && selectedAssetBalance !== undefined && selectedAssetBalance >= BigInt(quote.quote.assetAmount);
+  const formattedAaplBalance = formatTokenBalance(demoAaplBalance, demoAaplDecimals);
+  const formattedNvdaBalance = formatTokenBalance(demoNvdaBalance, demoNvdaDecimals);
 
   return (
     <section className="mt-10 border-t border-ink/10 pt-8">
       <div className="flex flex-col gap-4 rounded-2xl bg-ink p-5 text-white sm:flex-row sm:items-center sm:justify-between">
         <div>
           <p className="text-xs font-semibold uppercase tracking-[0.16em] text-mint/75">Buyer checkout</p>
-          <p className="mt-2 text-lg font-semibold">Pay with DemoAAPL on X Layer Testnet</p>
-          <p className="mt-1 text-sm leading-6 text-white/55">Test asset only · not backed by real Apple shares.</p>
+          <p className="mt-2 text-lg font-semibold">Pay with DemoAAPL or DemoNVDA on X Layer Testnet</p>
+          <p className="mt-1 text-sm leading-6 text-white/55">Demo assets only · not backed by real Apple or NVIDIA shares.</p>
         </div>
         <span className="w-fit rounded-full bg-mint px-3 py-1 text-xs font-bold text-ink">CHAIN 1952</span>
       </div>
@@ -890,13 +986,87 @@ function BuyerWalletPanel({
         </div>
       ) : (
         <>
-          <div className="mt-5 flex flex-col gap-2 rounded-2xl border border-ink/10 bg-cloud p-5 sm:flex-row sm:items-center sm:justify-between">
+          <div className="mt-5 flex flex-col gap-3 rounded-2xl border border-ink/10 bg-cloud p-5 sm:flex-row sm:items-center sm:justify-between">
             <div>
               <p className="text-sm font-semibold text-ink">Buyer wallet connected</p>
               <p className="mt-1 font-mono text-xs text-ink/55">{shortenAddress(address!)}</p>
             </div>
-            <p className="text-sm text-ink/55">DemoAAPL balance: {formattedBuyerBalance ?? (isBalanceLoading ? 'reading…' : '—')}</p>
+            <div className="grid gap-1 text-sm text-ink/55 sm:text-right">
+              <span>DemoAAPL: {formattedAaplBalance ?? (isBalanceLoading ? 'reading…' : '—')}</span>
+              <span>DemoNVDA: {formattedNvdaBalance ?? (isBalanceLoading ? 'reading…' : '—')}</span>
+            </div>
           </div>
+
+          <section className="mt-5 rounded-2xl border border-violet-200 bg-violet-50 p-5">
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-[0.16em] text-violet-800">Smart Spend</p>
+                <h3 className="mt-2 text-xl font-semibold tracking-tight text-violet-950">Portfolio-aware asset suggestion</h3>
+                <p className="mt-2 text-sm leading-6 text-violet-950/65">Deterministic demo allocation aid, not financial advice. It never submits a payment automatically.</p>
+              </div>
+              <span className="w-fit rounded-full bg-white px-3 py-1 text-xs font-bold text-violet-900">DEMO RULES</span>
+            </div>
+            <div className="mt-5 grid gap-3 sm:grid-cols-2">
+              {(['demoAapl', 'demoNvda'] as const).map((assetKey) => {
+                const allocation = smartSpendRecommendation.allocations.find((item) => item.key === assetKey);
+                return (
+                  <div key={assetKey} className="rounded-xl bg-white/80 p-4">
+                    <div className="flex items-center justify-between gap-3">
+                      <span className="font-semibold text-violet-950">{portfolioAssets[assetKey].label}</span>
+                      <label className="text-xs text-violet-950/60">
+                        Target %
+                        <input
+                          className="ml-2 w-16 rounded-lg border border-violet-200 bg-white px-2 py-1 text-right text-xs text-violet-950 outline-none focus:border-violet-500"
+                          type="number"
+                          min="0"
+                          max="100"
+                          step="1"
+                          value={targetAllocation[assetKey] / 100}
+                          onChange={(event) => updateTargetAllocation(assetKey, event.target.value)}
+                          disabled={isBusy}
+                        />
+                      </label>
+                    </div>
+                    <p className="mt-3 text-xs text-violet-950/60">
+                      Current: {allocation ? formatAllocationPercent(allocation.currentAllocationBps) : '—'} · Target: {targetAllocation[assetKey] / 100}%
+                    </p>
+                  </div>
+                );
+              })}
+            </div>
+            {targetAllocation.demoAapl + targetAllocation.demoNvda !== 10_000 ? (
+              <p className="mt-4 rounded-xl bg-amber-100 px-3 py-2 text-xs font-semibold text-amber-900">Target allocations must add up to 100%.</p>
+            ) : null}
+            <div className="mt-4 rounded-xl border border-violet-200 bg-white/70 p-4">
+              <p className="text-sm font-semibold text-violet-950">{smartSpendRecommendation.reason}</p>
+              {smartSpendRecommendation.allocations.length > 0 ? (
+                <p className="mt-2 text-xs leading-5 text-violet-950/60">
+                  Coverage check uses the quoted demo reference prices and token decimals; an asset is eligible only when its balance can cover the full invoice.
+                </p>
+              ) : null}
+            </div>
+            <div className="mt-4 flex flex-wrap gap-2">
+              <button
+                type="button"
+                className={`rounded-xl px-3 py-2 text-xs font-bold transition ${smartSpendApplied ? 'bg-violet-900 text-white' : 'bg-white text-violet-900 hover:bg-violet-100'}`}
+                onClick={applySmartSpend}
+                disabled={isBusy || !smartSpendRecommendation.assetKey}
+              >
+                {smartSpendRecommendation.assetKey ? `Use Smart Pay · ${portfolioAssets[smartSpendRecommendation.assetKey].label}` : 'Smart Pay unavailable'}
+              </button>
+              {(['demoAapl', 'demoNvda'] as const).map((assetKey) => (
+                <button
+                  key={assetKey}
+                  type="button"
+                  className={`rounded-xl px-3 py-2 text-xs font-bold transition ${!smartSpendApplied && selectedAssetKey === assetKey ? 'bg-ink text-white' : 'bg-white text-ink hover:bg-cloud'}`}
+                  onClick={() => selectManualAsset(assetKey)}
+                  disabled={isBusy}
+                >
+                  Pay manually with {portfolioAssets[assetKey].label}
+                </button>
+              ))}
+            </div>
+          </section>
 
           <div className="mt-5 rounded-2xl border border-ink/10 bg-mint/35 p-5">
             <div className="flex flex-wrap items-center justify-between gap-3">
@@ -909,13 +1079,13 @@ function BuyerWalletPanel({
               <div className="mt-5 grid gap-3 sm:grid-cols-2">
                 <div className="rounded-xl bg-white/80 p-4">
                   <p className="text-xs font-semibold uppercase tracking-[0.14em] text-ink/45">You spend</p>
-                  <p className="mt-2 text-2xl font-semibold">{displayAmount(quote.assetAmount)} <span className="text-sm text-ink/50">DemoAAPL</span></p>
+                  <p className="mt-2 text-2xl font-semibold">{displayAmount(quote.assetAmount)} <span className="text-sm text-ink/50">{portfolioAssets[quote.assetKey].label}</span></p>
                 </div>
                 <div className="rounded-xl bg-white/80 p-4">
                   <p className="text-xs font-semibold uppercase tracking-[0.14em] text-ink/45">Merchant receives</p>
                   <p className="mt-2 text-2xl font-semibold">{displayAmount(quote.stablecoinAmount)} <span className="text-sm text-ink/50">USD₮0</span></p>
                 </div>
-                <p className="sm:col-span-2 text-xs leading-5 text-ink/55">Demo reference price: {quote.referencePriceUsd} USD per DemoAAPL · token decimals read: {quote.assetDecimals}/{quote.stablecoinDecimals}. No oracle or live market price is used.</p>
+                <p className="sm:col-span-2 text-xs leading-5 text-ink/55">Demo reference price: {quote.referencePriceUsd} USD per {portfolioAssets[quote.assetKey].label} · token decimals read: {quote.assetDecimals}/{quote.stablecoinDecimals}. No oracle or live market price is used.</p>
               </div>
             ) : (
               <p className="mt-5 text-sm leading-6 text-ink/55">A quote will appear after the backend and deployed testnet contracts are configured.</p>
@@ -924,16 +1094,16 @@ function BuyerWalletPanel({
 
           {quoteError ? <p className="mt-4 rounded-xl bg-rose-50 px-4 py-3 text-sm text-rose-700">{quoteError}</p> : null}
           {paymentError ? <p className="mt-4 rounded-xl bg-rose-50 px-4 py-3 text-sm leading-6 text-rose-700">{paymentError}</p> : null}
-          {isBalanceError ? <p className="mt-4 rounded-xl bg-rose-50 px-4 py-3 text-sm text-rose-700">DemoAAPL balance could not be read from the configured token.</p> : null}
+          {isBalanceError ? <p className="mt-4 rounded-xl bg-rose-50 px-4 py-3 text-sm text-rose-700">A configured demo asset balance could not be read. Manual selection remains available only for deployed assets.</p> : null}
 
           <div className="mt-5 flex flex-col gap-3 sm:flex-row sm:items-center">
             <button
               type="button"
               className="rounded-xl bg-ink px-5 py-3 text-sm font-bold text-white transition hover:bg-ink/80 disabled:cursor-not-allowed disabled:opacity-40"
               onClick={payInvoice}
-              disabled={isBusy || Boolean(confirmedPaymentHash) || !quote || !hasEnoughDemoAapl || isBalanceLoading}
+              disabled={isBusy || Boolean(confirmedPaymentHash) || !quote || !hasEnoughSelectedAsset || isBalanceLoading}
             >
-              {paymentStep === 'awaiting-approval' ? 'Approve DemoAAPL in wallet…' : paymentStep === 'confirming-approval' ? 'Confirming approval…' : paymentStep === 'awaiting-payment-signature' ? 'Confirm payment in wallet…' : paymentStep === 'confirming-payment' ? 'Confirming settlement…' : paymentStep === 'reconciling' ? 'Verifying payment…' : paymentStep === 'paid' ? 'Payment received' : 'Approve and pay'}
+              {paymentStep === 'awaiting-approval' ? `Approve ${portfolioAssets[selectedAssetKey].label} in wallet…` : paymentStep === 'confirming-approval' ? 'Confirming approval…' : paymentStep === 'awaiting-payment-signature' ? 'Confirm payment in wallet…' : paymentStep === 'confirming-payment' ? 'Confirming settlement…' : paymentStep === 'reconciling' ? 'Verifying payment…' : paymentStep === 'paid' ? 'Payment received' : `Approve and pay with ${portfolioAssets[selectedAssetKey].label}`}
             </button>
             <button
               type="button"
@@ -1036,7 +1206,7 @@ function InvoiceDetailPage({ invoiceId, onBack }: { invoiceId: string; onBack: (
               <p className="mt-2 text-sm leading-6 text-ink/55">
                 {invoice.status === 'paid'
                   ? 'This status is read from a confirmed PortPay settlement event on X Layer Testnet.'
-                  : 'Review the exact quote below, then approve DemoAAPL and confirm the settlement in OKX Wallet.'}
+                  : 'Review the exact quote below, then approve the selected demo asset and confirm the settlement in OKX Wallet.'}
               </p>
             </div>
 
@@ -1141,6 +1311,17 @@ function PaymentReceipt({ invoice }: { invoice: Invoice }) {
           </p>
         ) : null}
         {invoice.settlementBlockNumber ? <p className="mt-3 text-xs text-emerald-900/65">Settlement block: {invoice.settlementBlockNumber}</p> : null}
+        <div className="mt-4 rounded-xl border border-emerald-900/10 bg-white/60 px-3 py-2 text-xs leading-5 text-emerald-900/70">
+          {invoice.smartSpendUsed ? (
+            <>
+              <span className="font-semibold text-emerald-950">Smart Spend used</span>
+              {invoice.smartSpendRecommendedAsset ? ` · ${portfolioAssets[invoice.smartSpendRecommendedAsset].label}` : ''}
+              {invoice.smartSpendReason ? <span className="block">{invoice.smartSpendReason}</span> : null}
+            </>
+          ) : (
+            <span><span className="font-semibold text-emerald-950">Manual asset selection</span> · Smart Spend was not used.</span>
+          )}
+        </div>
       </div>
     </section>
   );
@@ -1164,7 +1345,7 @@ function AppShell({ children }: { children: React.ReactNode }) {
 
         <footer className="flex flex-col gap-2 border-t border-ink/10 py-5 text-sm text-ink/45 sm:flex-row sm:items-center sm:justify-between">
           <span>PortPay · X Layer Testnet</span>
-          <span>Phase 4 receipts + Smart Payment History · DemoAAPL only.</span>
+          <span>Phase 5 Smart Spend · DemoAAPL + DemoNVDA test assets.</span>
         </footer>
       </div>
     </main>

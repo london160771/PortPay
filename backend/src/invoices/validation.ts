@@ -18,6 +18,12 @@ export type CreateInvoiceInput = {
   merchantAddress: string;
 };
 
+export type SmartSpendMetadataInput = {
+  smartSpendUsed: boolean;
+  smartSpendRecommendedAsset?: 'demoAapl' | 'demoNvda';
+  smartSpendReason?: string;
+};
+
 export function validateInvoiceId(value: unknown): string {
   if (typeof value !== 'string' || !UUID_PATTERN.test(value)) {
     throw new InvoiceValidationError('Invoice ID must be a valid UUID.');
@@ -44,6 +50,28 @@ export function validateTransactionHash(value: unknown): `0x${string}` {
   }
 
   return value.trim().toLowerCase() as `0x${string}`;
+}
+
+export function validateSmartSpendMetadata(input: unknown): SmartSpendMetadataInput {
+  const body = input && typeof input === 'object' ? (input as Record<string, unknown>) : {};
+  const smartSpendUsed = body.smartSpendUsed === true;
+  if (!smartSpendUsed) return { smartSpendUsed: false };
+
+  const recommendedAsset = body.smartSpendRecommendedAsset;
+  if (recommendedAsset !== 'demoAapl' && recommendedAsset !== 'demoNvda') {
+    throw new InvoiceValidationError('Smart Spend metadata must include a supported recommended asset.');
+  }
+
+  const reason = typeof body.smartSpendReason === 'string' ? body.smartSpendReason.trim() : '';
+  if (!reason || reason.length > 240) {
+    throw new InvoiceValidationError('Smart Spend reason must be between 1 and 240 characters.');
+  }
+
+  return {
+    smartSpendUsed: true,
+    smartSpendRecommendedAsset: recommendedAsset,
+    smartSpendReason: reason,
+  };
 }
 
 export function validateCreateInvoiceInput(input: unknown): CreateInvoiceInput {

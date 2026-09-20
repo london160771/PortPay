@@ -16,6 +16,7 @@ export type SettlementQuoteData = {
 
 export type SettlementQuoteResponse = {
   invoiceId: string;
+  assetKey: 'demoAapl' | 'demoNvda';
   invoiceIdHash: Hex;
   quote: SettlementQuoteData;
   quoteId: Hex;
@@ -31,11 +32,14 @@ export type SettlementQuoteResponse = {
 export type ReconcilePaymentInput = {
   txHash: Hex;
   buyerAddress: Address;
+  smartSpendUsed?: boolean;
+  smartSpendRecommendedAsset?: 'demoAapl' | 'demoNvda';
+  smartSpendReason?: string;
 };
 
 export type SettlementAdapter = {
   readonly name: 'TestnetSettlementAdapter' | 'OKXDEXMainnetAdapter';
-  createQuote(invoice: Invoice, buyerAddress: string): Promise<SettlementQuoteResponse>;
+  createQuote(invoice: Invoice, buyerAddress: string, assetKey?: string): Promise<SettlementQuoteResponse>;
   reconcilePayment(invoice: Invoice, input: ReconcilePaymentInput): Promise<PaymentEvidence>;
 };
 

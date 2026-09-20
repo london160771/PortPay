@@ -126,6 +126,7 @@ describe('merchant invoice API', () => {
       async createQuote(createdInvoice, buyerAddress) {
         return {
           invoiceId: createdInvoice.id,
+          assetKey: 'demoAapl' as const,
           invoiceIdHash: '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
           quote: {
             invoiceId: '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
@@ -160,6 +161,9 @@ describe('merchant invoice API', () => {
           quoteId: '0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee',
           settlementContract: '0xdddddddddddddddddddddddddddddddddddddddd',
           settlementBlockNumber: '42',
+          smartSpendUsed: input.smartSpendUsed,
+          smartSpendRecommendedAsset: input.smartSpendRecommendedAsset,
+          smartSpendReason: input.smartSpendReason,
         };
       },
     };
@@ -185,13 +189,22 @@ describe('merchant invoice API', () => {
       const reconcileResponse = await fetch(`${baseUrl}/api/invoices/${created.invoice.id}/reconcile`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ txHash, buyerAddress: buyer }),
+        body: JSON.stringify({
+          txHash,
+          buyerAddress: buyer,
+          smartSpendUsed: true,
+          smartSpendRecommendedAsset: 'demoNvda',
+          smartSpendReason: 'Recommended DemoNVDA because it is 8% above your target allocation.',
+        }),
       });
       const reconciled = (await reconcileResponse.json()) as { invoice: Invoice };
       expect(reconcileResponse.status).toBe(200);
       expect(reconciled.invoice.status).toBe('paid');
       expect(reconciled.invoice.paymentTxHash).toBe(txHash);
       expect(reconciled.invoice.stablecoinReceived).toBe('20');
+      expect(reconciled.invoice.smartSpendUsed).toBe(true);
+      expect(reconciled.invoice.smartSpendRecommendedAsset).toBe('demoNvda');
+      expect(reconciled.invoice.smartSpendReason).toMatch(/8% above/);
 
       const duplicateResponse = await fetch(`${baseUrl}/api/invoices/${created.invoice.id}/reconcile`, {
         method: 'POST',

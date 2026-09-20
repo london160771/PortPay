@@ -113,16 +113,23 @@ type TestnetAdapterOptions = {
   quoteTtlSeconds?: number;
   confirmationDepth?: number;
   referencePriceUsd?: string;
+  referencePrices?: { demoAapl?: string; demoNvda?: string };
   demoAaplDecimals?: number;
+  demoNvdaDecimals?: number;
   stablecoinDecimals?: number;
   addressConfig?: {
     testnetUsdt0: string;
     demoAapl: string;
+    demoNvda?: string;
     settlement: string;
   };
 };
 
-const DEFAULT_REFERENCE_PRICE_USD = '250.00';
+type SupportedAssetKey = 'demoAapl' | 'demoNvda';
+const DEFAULT_REFERENCE_PRICES: Record<SupportedAssetKey, string> = {
+  demoAapl: '250.00',
+  demoNvda: '180.00',
+};
 const DEFAULT_QUOTE_TTL_SECONDS = 300;
 const DEFAULT_CONFIRMATION_DEPTH = 2;
 
@@ -159,25 +166,24 @@ export function calculateAssetAmount(
   try {
     priceBase = parseUnits(referencePriceUsd, stablecoinDecimals);
   } catch {
-    throw new SettlementQuoteError('The DemoAAPL reference price is invalid.');
+    throw new SettlementQuoteError('The demo reference price is invalid.');
   }
-  if (priceBase <= 0n) throw new SettlementQuoteError('The DemoAAPL reference price must be positive.');
+  if (priceBase <= 0n) throw new SettlementQuoteError('The demo reference price must be positive.');
 
   const numerator = stablecoinAmount * 10n ** BigInt(assetDecimals);
-  if (numerator % priceBase !== 0n) {
-    throw new SettlementQuoteError(
-      'This invoice amount cannot be represented exactly at the configured DemoAAPL reference price.',
-    );
-  }
-
-  const assetAmount = numerator / priceBase;
-  if (assetAmount <= 0n) throw new SettlementQuoteError('The invoice amount produces no spendable DemoAAPL units.');
+  const assetAmount = (numerator + priceBase - 1n) / priceBase;
+  if (assetAmount <= 0n) throw new SettlementQuoteError('The invoice amount produces no spendable demo asset units.');
   return assetAmount;
 }
 
 function normalizeAddress(value: string, label: string): Address {
   if (!isAddress(value)) throw new SettlementNotConfiguredError(`${label} is not configured as an EVM address.`);
   return getAddress(value);
+}
+
+function normalizeAssetKey(value: string): SupportedAssetKey {
+  if (value === 'demoAapl' || value === 'demoNvda') return value;
+  throw new SettlementQuoteError('The selected portfolio asset is not supported.');
 }
 
 function normalizeBuyer(value: string): Address {
@@ -218,8 +224,8 @@ export class TestnetSettlementAdapter implements SettlementAdapter {
   private readonly publicClient: PublicClientLike;
   private readonly quoteTtlSeconds: number;
   private readonly confirmationDepth: number;
-  private readonly referencePriceUsd: string;
-  private readonly configuredDemoAaplDecimals?: number;
+  private readonly referencePrices: Record<SupportedAssetKey, string>;
+  private readonly configuredAssetDecimals: Partial<Record<SupportedAssetKey, number>>;
   private readonly configuredStablecoinDecimals?: number;
   private readonly addresses: TestnetAdapterOptions['addressConfig'];
 
@@ -236,24 +242,35 @@ export class TestnetSettlementAdapter implements SettlementAdapter {
     if (!Number.isInteger(this.confirmationDepth) || this.confirmationDepth < 1 || this.confirmationDepth > 64) {
       throw new SettlementNotConfiguredError('SETTLEMENT_CONFIRMATION_DEPTH must be between 1 and 64.');
     }
-    this.referencePriceUsd = options.referencePriceUsd || envValue('DEMO_AAPL_REFERENCE_PRICE_USD', DEFAULT_REFERENCE_PRICE_USD);
-    this.configuredDemoAaplDecimals = options.demoAaplDecimals;
+    this.referencePrices = {
+      demoAapl: options.referencePriceUsd
+        || options.referencePrices?.demoAapl
+        || envValue('DEMO_AAPL_REFERENCE_PRICE_USD', DEFAULT_REFERENCE_PRICES.demoAapl),
+      demoNvda: options.referencePrices?.demoNvda
+        || envValue('DEMO_NVDA_REFERENCE_PRICE_USD', DEFAULT_REFERENCE_PRICES.demoNvda),
+    };
+    this.configuredAssetDecimals = {
+      demoAapl: options.demoAaplDecimals,
+      demoNvda: options.demoNvdaDecimals,
+    };
     this.configuredStablecoinDecimals = options.stablecoinDecimals;
     this.addresses = options.addressConfig || {
       testnetUsdt0: portPayAddressConfig.testnetUsdt0,
       demoAapl: portPayAddressConfig.demoAapl,
+      demoNvda: portPayAddressConfig.demoNvda,
       settlement: portPayAddressConfig.settlement,
     };
   }
 
-  async createQuote(invoice: Invoice, buyerAddress: string): Promise<SettlementQuoteResponse> {
+  async createQuote(invoice: Invoice, buyerAddress: string, requestedAssetKey = 'demoAapl'): Promise<SettlementQuoteResponse> {
     if (invoice.status !== 'pending') {
       throw new SettlementQuoteError('This invoice is already paid and cannot be quoted again.');
     }
 
     const buyer = normalizeBuyer(buyerAddress);
     const merchant = normalizeAddress(invoice.merchantAddress, 'Merchant wallet');
-    const asset = normalizeAddress(this.addresses?.demoAapl || '', 'DEMO_AAPL_ADDRESS');
+    const assetKey = normalizeAssetKey(requestedAssetKey);
+    const asset = this.resolveAsset(assetKey);
     const stablecoin = normalizeAddress(this.addresses?.testnetUsdt0 || '', 'TESTNET_USDT0_ADDRESS');
     const settlementContract = normalizeAddress(
       this.addresses?.settlement || '',
@@ -261,11 +278,11 @@ export class TestnetSettlementAdapter implements SettlementAdapter {
     );
     const signer = getQuoteSigner(this.quoteSignerPrivateKey);
     await this.assertTestnetChain();
-    const [assetDecimals, stablecoinDecimals] = await this.readTokenDecimals(asset, stablecoin);
+    const [assetDecimals, stablecoinDecimals] = await this.readTokenDecimals(asset, stablecoin, assetKey);
     const stablecoinAmount = parseUnits(invoice.amountUsdt0, stablecoinDecimals);
     const assetAmount = calculateAssetAmount(
       stablecoinAmount,
-      this.referencePriceUsd,
+      this.referencePrices[assetKey],
       stablecoinDecimals,
       assetDecimals,
     );
@@ -315,6 +332,7 @@ export class TestnetSettlementAdapter implements SettlementAdapter {
 
     return {
       invoiceId: invoice.id,
+      assetKey,
       invoiceIdHash: quote.invoiceId,
       quote,
       quoteId,
@@ -323,7 +341,7 @@ export class TestnetSettlementAdapter implements SettlementAdapter {
       stablecoinDecimals,
       assetAmount: formatUnits(assetAmount, assetDecimals),
       stablecoinAmount: formatUnits(stablecoinAmount, stablecoinDecimals),
-      referencePriceUsd: this.referencePriceUsd,
+      referencePriceUsd: this.referencePrices[assetKey],
       expiresAt: new Date(Number(expiry) * 1000).toISOString(),
     };
   }
@@ -332,14 +350,17 @@ export class TestnetSettlementAdapter implements SettlementAdapter {
     const txHash = validateTransactionHash(input.txHash);
     const buyer = normalizeBuyer(input.buyerAddress);
     const merchant = normalizeAddress(invoice.merchantAddress, 'Merchant wallet');
-    const asset = normalizeAddress(this.addresses?.demoAapl || '', 'DEMO_AAPL_ADDRESS');
     const stablecoin = normalizeAddress(this.addresses?.testnetUsdt0 || '', 'TESTNET_USDT0_ADDRESS');
     const settlementContract = normalizeAddress(
       this.addresses?.settlement || '',
       'PORTPAY_SETTLEMENT_ADDRESS',
     );
     await this.assertTestnetChain();
-    const [, stablecoinDecimals] = await this.readTokenDecimals(asset, stablecoin);
+    const aaplAddress = this.resolveAsset('demoAapl');
+    const nvdaAddress = this.addresses?.demoNvda
+      ? this.resolveAsset('demoNvda')
+      : undefined;
+    const [, stablecoinDecimals] = await this.readTokenDecimals(aaplAddress, stablecoin, 'demoAapl');
     const expectedStablecoinAmount = parseUnits(invoice.amountUsdt0, stablecoinDecimals);
 
     let receipt;
@@ -418,8 +439,17 @@ export class TestnetSettlementAdapter implements SettlementAdapter {
     if (event.merchant.toLowerCase() !== merchant.toLowerCase()) {
       throw new SettlementVerificationError('The settlement event merchant does not match the invoice.');
     }
-    if (event.asset.toLowerCase() !== asset.toLowerCase() || event.stablecoin.toLowerCase() !== stablecoin.toLowerCase()) {
+    const eventAsset = event.asset.toLowerCase();
+    const eventAssetKey: SupportedAssetKey | undefined = eventAsset === aaplAddress.toLowerCase()
+      ? 'demoAapl'
+      : nvdaAddress && eventAsset === nvdaAddress.toLowerCase()
+        ? 'demoNvda'
+        : undefined;
+    if (!eventAssetKey || event.stablecoin.toLowerCase() !== stablecoin.toLowerCase()) {
       throw new SettlementVerificationError('The settlement event contains an unsupported token.');
+    }
+    if (input.smartSpendUsed && input.smartSpendRecommendedAsset !== eventAssetKey) {
+      throw new SettlementVerificationError('Smart Spend metadata does not match the settled portfolio asset.');
     }
     if (event.assetAmount <= 0n || event.stablecoinAmount !== expectedStablecoinAmount) {
       throw new SettlementVerificationError('The settlement event amounts do not match the invoice.');
@@ -429,13 +459,23 @@ export class TestnetSettlementAdapter implements SettlementAdapter {
       paymentTxHash: txHash,
       paidAt: new Date().toISOString(),
       buyerAddress: buyer.toLowerCase(),
-      spentAsset: asset.toLowerCase(),
+      spentAsset: event.asset.toLowerCase(),
       spentAmount: event.assetAmount.toString(),
       stablecoinReceived: formatUnits(event.stablecoinAmount, stablecoinDecimals),
       quoteId: event.quoteId,
       settlementContract: settlementContract.toLowerCase(),
       settlementBlockNumber: receipt.blockNumber.toString(),
+      ...(input.smartSpendUsed !== undefined ? { smartSpendUsed: input.smartSpendUsed } : {}),
+      ...(input.smartSpendRecommendedAsset ? { smartSpendRecommendedAsset: input.smartSpendRecommendedAsset } : {}),
+      ...(input.smartSpendReason ? { smartSpendReason: input.smartSpendReason } : {}),
     };
+  }
+
+  private resolveAsset(assetKey: SupportedAssetKey): Address {
+    return normalizeAddress(
+      assetKey === 'demoAapl' ? this.addresses?.demoAapl || '' : this.addresses?.demoNvda || '',
+      assetKey === 'demoAapl' ? 'DEMO_AAPL_ADDRESS' : 'DEMO_NVDA_ADDRESS',
+    );
   }
 
   private async assertTestnetChain(): Promise<void> {
@@ -450,8 +490,8 @@ export class TestnetSettlementAdapter implements SettlementAdapter {
     }
   }
 
-  private async readTokenDecimals(asset: Address, stablecoin: Address): Promise<[number, number]> {
-    const assetDecimals = this.configuredDemoAaplDecimals ?? await this.readDecimals(asset);
+  private async readTokenDecimals(asset: Address, stablecoin: Address, assetKey?: SupportedAssetKey): Promise<[number, number]> {
+    const assetDecimals = assetKey ? this.configuredAssetDecimals[assetKey] ?? await this.readDecimals(asset) : await this.readDecimals(asset);
     const stablecoinDecimals = this.configuredStablecoinDecimals ?? await this.readDecimals(stablecoin);
     if (!Number.isInteger(assetDecimals) || !Number.isInteger(stablecoinDecimals)) {
       throw new SettlementVerificationError('Token decimals could not be read from the configured contracts.');

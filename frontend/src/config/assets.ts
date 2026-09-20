@@ -38,13 +38,27 @@ export const erc20BalanceAbi = [
   },
 ] as const;
 
-export const testnetAssets = {
+export const portfolioAssets = {
   demoAapl: {
     key: 'demoAapl',
     label: 'DemoAAPL',
     description: 'Test asset · not an official xStock or real Apple-backed security',
     address: portPayNetworkConfig.demoAssetAddresses.demoAapl,
+    referencePriceUsd: '250.00',
+    decimals: 18,
   },
+  demoNvda: {
+    key: 'demoNvda',
+    label: 'DemoNVDA',
+    description: 'Test asset · not an official xStock or real NVIDIA-backed security',
+    address: portPayNetworkConfig.demoAssetAddresses.demoNvda,
+    referencePriceUsd: '180.00',
+    decimals: 18,
+  },
+} as const;
+
+export const testnetAssets = {
+  ...portfolioAssets,
   usdt0: {
     key: 'usdt0',
     label: 'USD₮0',

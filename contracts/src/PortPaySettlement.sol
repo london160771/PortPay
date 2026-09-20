@@ -28,9 +28,11 @@ contract PortPaySettlement {
 
     address public immutable quoteSigner;
     address public immutable demoAsset;
+    address public immutable demoNvda;
     address public immutable stablecoin;
     bytes32 public immutable domainSeparator;
 
+    mapping(address asset => bool supported) public supportedAssets;
     mapping(bytes32 invoiceId => bool settled) public settledInvoices;
     uint256 private reentrancyState = 1;
 
@@ -75,11 +77,12 @@ contract PortPaySettlement {
     error UnexpectedTransferAmount();
     error Reentrancy();
 
-    constructor(address quoteSigner_, address demoAsset_, address stablecoin_) {
+    constructor(address quoteSigner_, address demoAsset_, address demoNvda_, address stablecoin_) {
         if (
             block.chainid != X_LAYER_TESTNET_CHAIN_ID || quoteSigner_ == address(0)
-                || demoAsset_ == address(0) || stablecoin_ == address(0)
-                || demoAsset_ == stablecoin_ || demoAsset_.code.length == 0
+                || demoAsset_ == address(0) || demoNvda_ == address(0) || stablecoin_ == address(0)
+                || demoAsset_ == stablecoin_ || demoNvda_ == stablecoin_ || demoAsset_ == demoNvda_
+                || demoAsset_.code.length == 0 || demoNvda_.code.length == 0
                 || stablecoin_.code.length == 0
         ) {
             revert InvalidConstructorConfiguration();
@@ -87,7 +90,10 @@ contract PortPaySettlement {
 
         quoteSigner = quoteSigner_;
         demoAsset = demoAsset_;
+        demoNvda = demoNvda_;
         stablecoin = stablecoin_;
+        supportedAssets[demoAsset_] = true;
+        supportedAssets[demoNvda_] = true;
         domainSeparator = keccak256(
             abi.encode(
                 EIP712_DOMAIN_TYPEHASH,
@@ -116,7 +122,7 @@ contract PortPaySettlement {
         if (quote.buyer == address(0) || quote.merchant == address(0)) {
             revert InvalidParticipant();
         }
-        if (quote.asset != demoAsset || quote.stablecoin != stablecoin) revert InvalidToken();
+        if (!supportedAssets[quote.asset] || quote.stablecoin != stablecoin) revert InvalidToken();
         if (
             quote.assetAmount == 0 || quote.stablecoinAmount == 0 || quote.chainId != block.chainid
                 || quote.settlementContract != address(this)
@@ -135,7 +141,7 @@ contract PortPaySettlement {
         }
         // Mark before external token calls; a failure reverts the marker atomically.
         settledInvoices[quote.invoiceId] = true;
-        _transferAssetExact(quote.buyer, quote.assetAmount);
+        _transferAssetExact(quote.asset, quote.buyer, quote.assetAmount);
         _transferStablecoinExact(quote.merchant, quote.stablecoinAmount);
 
         emit SettlementExecuted(
@@ -152,17 +158,16 @@ contract PortPaySettlement {
         reentrancyState = 1;
     }
 
-    function _transferAssetExact(address buyer, uint256 amount) private {
-        uint256 buyerAssetBefore = IERC20Settlement(demoAsset).balanceOf(buyer);
-        uint256 settlementAssetBefore = IERC20Settlement(demoAsset).balanceOf(address(this));
+    function _transferAssetExact(address asset, address buyer, uint256 amount) private {
+        uint256 buyerAssetBefore = IERC20Settlement(asset).balanceOf(buyer);
+        uint256 settlementAssetBefore = IERC20Settlement(asset).balanceOf(address(this));
         if (!_callOptionalReturn(
-                demoAsset,
-                abi.encodeCall(IERC20Settlement.transferFrom, (buyer, address(this), amount))
+                asset, abi.encodeCall(IERC20Settlement.transferFrom, (buyer, address(this), amount))
             )) {
             revert AssetTransferFailed();
         }
-        uint256 buyerAssetAfter = IERC20Settlement(demoAsset).balanceOf(buyer);
-        uint256 settlementAssetAfter = IERC20Settlement(demoAsset).balanceOf(address(this));
+        uint256 buyerAssetAfter = IERC20Settlement(asset).balanceOf(buyer);
+        uint256 settlementAssetAfter = IERC20Settlement(asset).balanceOf(address(this));
         if (
             buyerAssetAfter > buyerAssetBefore || buyerAssetBefore - buyerAssetAfter != amount
                 || settlementAssetAfter < settlementAssetBefore

@@ -3,6 +3,7 @@ pragma solidity ^0.8.24;
 
 import { Test } from "forge-std/Test.sol";
 import { DemoAAPL } from "../src/DemoAAPL.sol";
+import { DemoNVDA } from "../src/DemoNVDA.sol";
 import { PortPaySettlement } from "../src/PortPaySettlement.sol";
 
 contract MockSettlementToken {
@@ -91,6 +92,7 @@ contract PortPaySettlementTest is Test {
     address private merchant = address(0xCAFE);
     address private quoteSigner;
     DemoAAPL private demoAapl;
+    DemoNVDA private demoNvda;
     MockSettlementToken private usdt0;
     PortPaySettlement private settlement;
 
@@ -99,10 +101,14 @@ contract PortPaySettlementTest is Test {
         buyer = vm.addr(OTHER_PRIVATE_KEY);
         quoteSigner = vm.addr(SIGNER_PRIVATE_KEY);
         demoAapl = new DemoAAPL(address(this));
+        demoNvda = new DemoNVDA(address(this));
         usdt0 = new MockSettlementToken(6);
-        settlement = new PortPaySettlement(quoteSigner, address(demoAapl), address(usdt0));
+        settlement = new PortPaySettlement(
+            quoteSigner, address(demoAapl), address(demoNvda), address(usdt0)
+        );
 
         demoAapl.mint(buyer, 1 ether);
+        demoNvda.mint(buyer, 1 ether);
         usdt0.mint(address(settlement), 100 ether);
     }
 
@@ -137,6 +143,23 @@ contract PortPaySettlementTest is Test {
         assertEq(demoAapl.balanceOf(address(settlement)), quote.assetAmount);
         assertEq(usdt0.balanceOf(merchant), quote.stablecoinAmount);
         assertTrue(settlement.settledInvoices(quote.invoiceId));
+    }
+
+    function testSettlesConfiguredDemoNvdaAsset() public {
+        PortPaySettlement.SettlementQuote memory quote = _quote(
+            keccak256("invoice-nvda"), 80_000_000_000_000_000, 20_000_000, block.timestamp + 300
+        );
+        quote.asset = address(demoNvda);
+        bytes memory signature = _sign(quote, SIGNER_PRIVATE_KEY);
+
+        vm.prank(buyer);
+        demoNvda.approve(address(settlement), quote.assetAmount);
+        vm.prank(buyer);
+        settlement.settle(quote, signature);
+
+        assertEq(demoNvda.balanceOf(buyer), 920_000_000_000_000_000);
+        assertEq(demoNvda.balanceOf(address(settlement)), quote.assetAmount);
+        assertEq(usdt0.balanceOf(merchant), quote.stablecoinAmount);
     }
 
     function testRejectsDuplicateInvoiceSettlement() public {
@@ -248,15 +271,16 @@ contract PortPaySettlementTest is Test {
 
     function testRejectsNonContractTokenAddressesAtDeployment() public {
         vm.expectRevert(PortPaySettlement.InvalidConstructorConfiguration.selector);
-        new PortPaySettlement(quoteSigner, address(0x1234), address(usdt0));
+        new PortPaySettlement(quoteSigner, address(0x1234), address(demoNvda), address(usdt0));
         vm.expectRevert(PortPaySettlement.InvalidConstructorConfiguration.selector);
-        new PortPaySettlement(quoteSigner, address(demoAapl), address(0x1234));
+        new PortPaySettlement(quoteSigner, address(demoAapl), address(0x1234), address(usdt0));
     }
 
     function testFeeOnBuyerAssetTransferRevertsAtomically() public {
         FeeOnTransferToken feeAsset = new FeeOnTransferToken(18);
-        PortPaySettlement feeSettlement =
-            new PortPaySettlement(quoteSigner, address(feeAsset), address(usdt0));
+        PortPaySettlement feeSettlement = new PortPaySettlement(
+            quoteSigner, address(feeAsset), address(demoAapl), address(usdt0)
+        );
         feeAsset.mint(buyer, 1 ether);
         usdt0.mint(address(feeSettlement), 20_000_000);
         PortPaySettlement.SettlementQuote memory quote = _quote(
@@ -281,8 +305,9 @@ contract PortPaySettlementTest is Test {
 
     function testFeeOnMerchantSettlementRevertsAtomically() public {
         FeeOnTransferToken feeStablecoin = new FeeOnTransferToken(6);
-        PortPaySettlement feeSettlement =
-            new PortPaySettlement(quoteSigner, address(demoAapl), address(feeStablecoin));
+        PortPaySettlement feeSettlement = new PortPaySettlement(
+            quoteSigner, address(demoAapl), address(demoNvda), address(feeStablecoin)
+        );
         feeStablecoin.mint(address(feeSettlement), 20_000_000);
         PortPaySettlement.SettlementQuote memory quote = _quote(
             keccak256("invoice-fee-stablecoin"),
@@ -306,8 +331,9 @@ contract PortPaySettlementTest is Test {
 
     function testStablecoinTransferFailureRevertsAssetAndInvoiceMarker() public {
         RejectingStablecoin rejectingStablecoin = new RejectingStablecoin();
-        PortPaySettlement rejectingSettlement =
-            new PortPaySettlement(quoteSigner, address(demoAapl), address(rejectingStablecoin));
+        PortPaySettlement rejectingSettlement = new PortPaySettlement(
+            quoteSigner, address(demoAapl), address(demoNvda), address(rejectingStablecoin)
+        );
         rejectingStablecoin.mint(address(rejectingSettlement), 20_000_000);
         PortPaySettlement.SettlementQuote memory quote = _quote(
             keccak256("invoice-reject-transfer"),

@@ -14,16 +14,18 @@ contract DeployPortPaySettlement is Script {
         uint256 deployerKey = vm.envUint("PRIVATE_KEY");
         address quoteSigner = vm.envAddress("QUOTE_SIGNER_ADDRESS");
         address demoAapl = vm.envAddress("DEMO_AAPL_ADDRESS");
+        address demoNvda = vm.envAddress("DEMO_NVDA_ADDRESS");
         address usdt0 = vm.envAddress("TESTNET_USDT0_ADDRESS");
         require(usdt0 == OFFICIAL_TESTNET_USDT0, "Official testnet USDt0 required");
 
         vm.startBroadcast(deployerKey);
-        settlement = new PortPaySettlement(quoteSigner, demoAapl, usdt0);
+        settlement = new PortPaySettlement(quoteSigner, demoAapl, demoNvda, usdt0);
         vm.stopBroadcast();
 
         console2.log("PortPaySettlement deployed at", address(settlement));
         console2.log("Quote signer", quoteSigner);
         console2.log("DemoAAPL", demoAapl);
+        console2.log("DemoNVDA", demoNvda);
         console2.log("USDt0", usdt0);
     }
 }

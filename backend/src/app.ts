@@ -15,6 +15,7 @@ import {
   InvoiceValidationError,
   validateInvoiceId,
   validateMerchantAddress,
+  validateSmartSpendMetadata,
   validateTransactionHash,
   validateWalletAddress,
 } from './invoices/validation.js';
@@ -118,7 +119,11 @@ export function createApp(
         return;
       }
 
-      const quote = await settlementAdapter.createQuote(invoice, request.body?.buyerAddress);
+      const quote = await settlementAdapter.createQuote(
+        invoice,
+        request.body?.buyerAddress,
+        request.body?.assetKey,
+      );
       response.json({ quote });
     } catch (error) {
       next(error);
@@ -141,6 +146,7 @@ export function createApp(
         {
           txHash: validateTransactionHash(request.body?.txHash),
           buyerAddress: validateWalletAddress(request.body?.buyerAddress, 'Buyer wallet') as `0x${string}`,
+          ...validateSmartSpendMetadata(request.body),
         },
       );
       response.json({ invoice: updatedInvoice });

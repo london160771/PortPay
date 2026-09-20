@@ -73,6 +73,9 @@ export class InMemoryInvoiceRepository implements InvoiceRepository {
       quoteId: evidence.quoteId,
       settlementContract: evidence.settlementContract,
       settlementBlockNumber: evidence.settlementBlockNumber,
+      ...(evidence.smartSpendUsed !== undefined ? { smartSpendUsed: evidence.smartSpendUsed } : {}),
+      ...(evidence.smartSpendRecommendedAsset ? { smartSpendRecommendedAsset: evidence.smartSpendRecommendedAsset } : {}),
+      ...(evidence.smartSpendReason ? { smartSpendReason: evidence.smartSpendReason } : {}),
     };
     this.invoices.set(id, updated);
     return updated;
@@ -97,6 +100,9 @@ type InvoiceRow = {
   quote_id: string | null;
   settlement_contract: string | null;
   settlement_block_number: string | null;
+  smart_spend_used: boolean | null;
+  smart_spend_recommended_asset: string | null;
+  smart_spend_reason: string | null;
 };
 
 export class SupabaseInvoiceRepository implements InvoiceRepository {
@@ -174,6 +180,9 @@ export class SupabaseInvoiceRepository implements InvoiceRepository {
         quote_id: evidence.quoteId,
         settlement_contract: evidence.settlementContract,
         settlement_block_number: evidence.settlementBlockNumber,
+        smart_spend_used: evidence.smartSpendUsed ?? false,
+        smart_spend_recommended_asset: evidence.smartSpendRecommendedAsset ?? null,
+        smart_spend_reason: evidence.smartSpendReason ?? null,
       })
       .eq('id', id)
       .eq('status', 'pending')
@@ -204,6 +213,9 @@ function mapInvoiceRow(row: InvoiceRow): Invoice {
     ...(row.quote_id ? { quoteId: row.quote_id } : {}),
     ...(row.settlement_contract ? { settlementContract: row.settlement_contract } : {}),
     ...(row.settlement_block_number ? { settlementBlockNumber: row.settlement_block_number } : {}),
+    ...(row.smart_spend_used !== null ? { smartSpendUsed: row.smart_spend_used } : {}),
+    ...(row.smart_spend_recommended_asset ? { smartSpendRecommendedAsset: row.smart_spend_recommended_asset } : {}),
+    ...(row.smart_spend_reason ? { smartSpendReason: row.smart_spend_reason } : {}),
   };
 }
 

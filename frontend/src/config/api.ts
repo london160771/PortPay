@@ -18,10 +18,14 @@ export type Invoice = {
   quoteId?: string;
   settlementContract?: string;
   settlementBlockNumber?: string;
+  smartSpendUsed?: boolean;
+  smartSpendRecommendedAsset?: 'demoAapl' | 'demoNvda';
+  smartSpendReason?: string;
 };
 
 export type SettlementQuote = {
   invoiceId: string;
+  assetKey: 'demoAapl' | 'demoNvda';
   invoiceIdHash: `0x${string}`;
   quote: {
     invoiceId: `0x${string}`;
@@ -112,16 +116,26 @@ export function getInvoice(invoiceId: string): Promise<{ invoice: Invoice }> {
   return request<{ invoice: Invoice }>(`/api/invoices/${encodeURIComponent(invoiceId)}`);
 }
 
-export function createSettlementQuote(invoiceId: string, buyerAddress: string): Promise<{ quote: SettlementQuote }> {
+export function createSettlementQuote(
+  invoiceId: string,
+  buyerAddress: string,
+  assetKey: 'demoAapl' | 'demoNvda' = 'demoAapl',
+): Promise<{ quote: SettlementQuote }> {
   return request<{ quote: SettlementQuote }>(`/api/invoices/${encodeURIComponent(invoiceId)}/quote`, {
     method: 'POST',
-    body: JSON.stringify({ buyerAddress }),
+    body: JSON.stringify({ buyerAddress, assetKey }),
   });
 }
 
 export function reconcileInvoicePayment(
   invoiceId: string,
-  input: { txHash: string; buyerAddress: string },
+  input: {
+    txHash: string;
+    buyerAddress: string;
+    smartSpendUsed?: boolean;
+    smartSpendRecommendedAsset?: 'demoAapl' | 'demoNvda';
+    smartSpendReason?: string;
+  },
 ): Promise<{ invoice: Invoice }> {
   return request<{ invoice: Invoice }>(`/api/invoices/${encodeURIComponent(invoiceId)}/reconcile`, {
     method: 'POST',

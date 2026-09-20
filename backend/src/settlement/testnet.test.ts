@@ -76,8 +76,40 @@ describe('TestnetSettlementAdapter', () => {
     expect(await recoverTypedDataAddress({ domain: { ...domain, verifyingContract: getAddress('0xdddddddddddddddddddddddddddddddddddddddd') }, types: settlementQuoteTypes, primaryType: 'SettlementQuote', message: signedMessage, signature: quote.signature })).not.toBe(signer);
   });
 
-  it('rejects a conversion that would silently round the buyer amount', () => {
-    expect(() => calculateAssetAmount(20_000_000n, '249.99', 6, 18)).toThrow(/represented exactly/);
+  it('rounds the required asset amount upward so the quoted invoice is fully covered', () => {
+    expect(calculateAssetAmount(20_000_000n, '249.99', 6, 18)).toBe(80_003_200_128_005_121n);
+  });
+
+  it('quotes DemoNVDA with its own asset address, price, and decimals', async () => {
+    const nvda = '0xdddddddddddddddddddddddddddddddddddddddd';
+    const adapter = new TestnetSettlementAdapter({
+      quoteSignerPrivateKey: SIGNER_KEY,
+      demoAaplDecimals: 18,
+      demoNvdaDecimals: 18,
+      stablecoinDecimals: 6,
+      referencePrices: { demoAapl: '250.00', demoNvda: '180.00' },
+      addressConfig: { testnetUsdt0: STABLECOIN, demoAapl: ASSET, demoNvda: nvda, settlement: SETTLEMENT },
+      publicClient: {
+        getChainId: async () => 1952,
+        readContract: async () => 18,
+        getTransactionReceipt: async () => ({
+          status: 'success' as const,
+          to: SETTLEMENT,
+          from: MERCHANT,
+          blockNumber: 1n,
+          blockHash: `0x${'1'.repeat(64)}` as Hex,
+          logs: [],
+        }),
+        getBlockNumber: async () => 2n,
+        getBlock: async () => ({ hash: `0x${'1'.repeat(64)}` as Hex }),
+      },
+    });
+
+    const quote = await adapter.createQuote(invoice, '0x2222222222222222222222222222222222222222', 'demoNvda');
+    expect(quote.assetKey).toBe('demoNvda');
+    expect(quote.quote.asset.toLowerCase()).toBe(nvda);
+    expect(quote.referencePriceUsd).toBe('180.00');
+    expect(quote.assetAmount).toBe('0.111111111111111112');
   });
 
   it('rejects quotes for already paid invoices', async () => {
@@ -147,6 +179,9 @@ describe('TestnetSettlementAdapter', () => {
     const evidence = await adapter.reconcilePayment(invoice, {
       txHash: '0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef' as Hex,
       buyerAddress: buyer,
+      smartSpendUsed: true,
+      smartSpendRecommendedAsset: 'demoAapl',
+      smartSpendReason: 'Recommended DemoAAPL because it is above target.',
     });
 
     expect(evidence.buyerAddress).toBe(buyer.toLowerCase());
@@ -154,6 +189,17 @@ describe('TestnetSettlementAdapter', () => {
     expect(evidence.stablecoinReceived).toBe('20');
     expect(evidence.quoteId).toBe(buyerQuote.quoteId);
     expect(evidence.settlementBlockNumber).toBe('42');
+    expect(evidence.smartSpendUsed).toBe(true);
+    expect(evidence.smartSpendRecommendedAsset).toBe('demoAapl');
+    expect(evidence.smartSpendReason).toContain('above target');
+
+    await expect(adapter.reconcilePayment(invoice, {
+      txHash: '0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef' as Hex,
+      buyerAddress: buyer,
+      smartSpendUsed: true,
+      smartSpendRecommendedAsset: 'demoNvda',
+      smartSpendReason: 'Mismatched metadata',
+    })).rejects.toThrow(/does not match/);
   });
 
   it('rejects a matching event emitted by a different contract in the same successful transaction', async () => {

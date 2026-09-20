@@ -1,8 +1,7 @@
 import { formatUnits, isAddress } from 'viem';
 import type { Invoice } from './api';
+import { portfolioAssets } from './assets';
 import { portPayNetworkConfig, VERIFIED_TESTNET_USDT0_ADDRESS } from './network';
-
-const DEMO_AAPL_DECIMALS = 18;
 
 function displayDecimal(value: string): string {
   if (!value.includes('.')) return value;
@@ -12,14 +11,12 @@ function displayDecimal(value: string): string {
 export function formatSpentAmount(invoice: Invoice): string {
   if (!invoice.spentAmount || !/^\d+$/.test(invoice.spentAmount)) return 'Amount unavailable';
 
-  if (
-    invoice.spentAsset &&
-    isAddress(invoice.spentAsset) &&
-    portPayNetworkConfig.demoAssetAddresses.demoAapl &&
-    invoice.spentAsset.toLowerCase() === portPayNetworkConfig.demoAssetAddresses.demoAapl.toLowerCase()
-  ) {
+  const knownAsset = Object.values(portfolioAssets).find((asset) =>
+    invoice.spentAsset && isAddress(invoice.spentAsset) && asset.address
+      && invoice.spentAsset.toLowerCase() === asset.address.toLowerCase());
+  if (knownAsset) {
     try {
-      return `${displayDecimal(formatUnits(BigInt(invoice.spentAmount), DEMO_AAPL_DECIMALS))} DemoAAPL`;
+      return `${displayDecimal(formatUnits(BigInt(invoice.spentAmount), knownAsset.decimals))} ${knownAsset.label}`;
     } catch {
       return 'Amount unavailable';
     }

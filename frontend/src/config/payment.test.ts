@@ -8,6 +8,7 @@ const stablecoin = '0x3333333333333333333333333333333333333333';
 const settlement = '0x4444444444444444444444444444444444444444';
 const quote: SettlementQuote = {
   invoiceId: '00000000-0000-4000-8000-000000000001',
+  assetKey: 'demoAapl',
   invoiceIdHash: `0x${'a'.repeat(64)}`,
   quote: {
     invoiceId: `0x${'a'.repeat(64)}`,

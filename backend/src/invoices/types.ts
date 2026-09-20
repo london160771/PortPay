@@ -19,6 +19,9 @@ export type Invoice = {
   quoteId?: string;
   settlementContract?: string;
   settlementBlockNumber?: string;
+  smartSpendUsed?: boolean;
+  smartSpendRecommendedAsset?: string;
+  smartSpendReason?: string;
 };
 
 export type PaymentEvidence = {
@@ -31,6 +34,9 @@ export type PaymentEvidence = {
   quoteId: string;
   settlementContract: string;
   settlementBlockNumber: string;
+  smartSpendUsed?: boolean;
+  smartSpendRecommendedAsset?: string;
+  smartSpendReason?: string;
 };
 
 export interface InvoiceRepository {
