@@ -7,6 +7,7 @@ import { DemoAAPL } from "../src/DemoAAPL.sol";
 
 contract DeployDemoAAPL is Script {
     function run() external returns (DemoAAPL token) {
+        require(block.chainid == 1952, "X Layer Testnet only");
         uint256 deployerKey = vm.envUint("PRIVATE_KEY");
         address deployer = vm.addr(deployerKey);
 

@@ -213,8 +213,8 @@ Do not perform an optional mainnet test until the user explicitly approves it af
 - Merchant dashboard and wallet-aware invoice creation.
 - Persist invoice metadata in Supabase/Postgres and expose a unique shareable payment link.
 - Show pending/paid invoice status and a clean invoice detail/waiting screen.
-- Buyer checkout and manual `DemoAAPL` payment are a follow-on Phase 2 slice and are intentionally not part of this implementation request.
-- Do not start Phase 3 until the remaining Phase 2 checkout slice is separately implemented and approved.
+- The merchant invoice slice is complete in Phase 2. Buyer checkout and manual `DemoAAPL` payment are implemented and verified as part of Phase 3 Core Settlement because they are inseparable from the real settlement path.
+- Do not start Phase 4 until the Phase 3 settlement flow has passed its required review checkpoint and approval gate.
 
 ### Phase 3 — Core Settlement
 
@@ -223,6 +223,8 @@ Do not perform an optional mainnet test until the user explicitly approves it af
 - `TestnetSettlementAdapter`.
 - Confirm one real testnet payment and merchant receipt.
 - Stop for GPT-5.6 Sol High review reminder.
+
+The current implementation boundary is a server-signed EIP-712 quote plus canonical, two-confirmation-by-default `SettlementExecuted` receipt-event reconciliation. The confirmation depth is configurable through `SETTLEMENT_CONFIRMATION_DEPTH`. Do not treat the phase as live-complete until Supabase migrations are applied, the testnet contracts are deployed/funded, and one real X Layer Testnet transaction is verified.
 
 ### Phase 4 — Receipts/history
 

@@ -336,8 +336,8 @@ Only one phase may be active at a time. Phase names below are canonical.
 - Implement the merchant dashboard and wallet-aware invoice/payment-link flow.
 - Persist invoice metadata in Supabase/Postgres with reproducible migrations.
 - Support `pending` and `paid` invoice status display without fabricating onchain payment state.
-- Buyer checkout and manual `DemoAAPL` payment are a follow-on Phase 2 slice and are intentionally not part of this implementation request.
-- Do not start Phase 3 until the remaining Phase 2 checkout slice is separately implemented and approved.
+- The merchant invoice slice is complete in Phase 2. Buyer checkout and manual `DemoAAPL` payment are implemented and verified as part of Phase 3 Core Settlement because they are inseparable from the real settlement path.
+- Do not start Phase 4 until the Phase 3 settlement flow has passed its required review checkpoint and approval gate.
 
 ### Phase 3 — Core Settlement
 
@@ -346,6 +346,8 @@ Only one phase may be active at a time. Phase names below are canonical.
 - Fund the settlement contract with testnet `USD₮0`.
 - Wire `TestnetSettlementAdapter`.
 - Complete one real X Layer Testnet settlement and merchant receipt.
+
+The Phase 3 implementation uses a server-signed EIP-712 quote bound to the invoice, buyer, merchant, configured demo asset, official testnet `USD₮0`, exact integer amounts, chain ID, settlement contract, and short expiry. The backend marks an invoice `paid` only after checking that the receipt belongs to the canonical block, has the configured confirmation depth, and contains one matching `SettlementExecuted` event. The default confirmation depth is two blocks and is configurable through `SETTLEMENT_CONFIRMATION_DEPTH`. Live contract deployment, Supabase migration application, funding, and the real testnet transaction remain environment-dependent verification steps.
 
 **Mandatory GPT-5.6 Sol High review checkpoint:** immediately after Phase 3 — Core Settlement is working and before treating the core flow as finished. Review contract behavior, decimals, quote validation, duplicate/replay protection, approvals, merchant authorization, failure handling, and the actual testnet transaction.
 

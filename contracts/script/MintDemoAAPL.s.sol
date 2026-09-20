@@ -7,6 +7,7 @@ import { DemoAAPL } from "../src/DemoAAPL.sol";
 
 contract MintDemoAAPL is Script {
     function run() external {
+        require(block.chainid == 1952, "X Layer Testnet only");
         uint256 deployerKey = vm.envUint("PRIVATE_KEY");
         DemoAAPL token = DemoAAPL(vm.envAddress("DEMO_AAPL_ADDRESS"));
         address recipient = vm.envAddress("DEMO_AAPL_MINT_TO");

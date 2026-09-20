@@ -1,9 +1,40 @@
 import { http, createConfig } from 'wagmi';
 import { injected } from 'wagmi/connectors';
+import type { EIP1193Provider } from 'viem';
 import { xLayerTestnet } from './network';
 
-// OKX Wallet exposes an injected EVM provider in the browser.
-export const okxWalletConnector = injected({ target: 'okxWallet' });
+type OkxProvider = EIP1193Provider & {
+  isOkxWallet?: true;
+  isOKExWallet?: true;
+  providers?: OkxProvider[];
+};
+
+type OkxInjectedWindow = {
+  okxwallet?: OkxProvider;
+  ethereum?: OkxProvider;
+};
+
+function getOkxProvider(browserWindow?: unknown): OkxProvider | undefined {
+  const okxWindow = browserWindow as OkxInjectedWindow | undefined;
+  if (okxWindow?.okxwallet) return okxWindow.okxwallet;
+
+  const ethereum = okxWindow?.ethereum;
+  if (ethereum?.isOkxWallet || ethereum?.isOKExWallet) return ethereum;
+
+  const providers = ethereum?.providers;
+  return providers?.find((provider: OkxProvider) => provider.isOkxWallet || provider.isOKExWallet);
+}
+
+// OKX documents its EVM extension provider at window.okxwallet. The ethereum
+// provider fallback supports browsers that expose the same provider through
+// EIP-6963's window.ethereum.providers list.
+export const okxWalletConnector = injected({
+  target: {
+    id: 'okxWallet',
+    name: 'OKX Wallet',
+    provider: getOkxProvider,
+  },
+});
 
 export const wagmiConfig = createConfig({
   chains: [xLayerTestnet],

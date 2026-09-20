@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { createApp } from '../app.js';
 import { InMemoryInvoiceRepository } from './repository.js';
 import type { Invoice } from './types.js';
+import type { SettlementAdapter } from '../settlement/types.js';
 
 const MERCHANT = '0x1111111111111111111111111111111111111111';
 const OTHER_MERCHANT = '0x2222222222222222222222222222222222222222';
@@ -114,6 +115,89 @@ describe('merchant invoice API', () => {
       const body = (await response.json()) as { invoice: Invoice };
       expect(response.status).toBe(200);
       expect(body.invoice.status).toBe('paid');
+    });
+  });
+
+  it('issues a buyer quote and reconciles a confirmed adapter payment into paid status', async () => {
+    const repository = new InMemoryInvoiceRepository();
+    const adapter: SettlementAdapter = {
+      name: 'TestnetSettlementAdapter',
+      async createQuote(createdInvoice, buyerAddress) {
+        return {
+          invoiceId: createdInvoice.id,
+          invoiceIdHash: '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+          quote: {
+            invoiceId: '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+            buyer: buyerAddress as `0x${string}`,
+            merchant: createdInvoice.merchantAddress as `0x${string}`,
+            asset: '0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
+            assetAmount: '80000000000000000',
+            stablecoin: '0xcccccccccccccccccccccccccccccccccccccccc',
+            stablecoinAmount: '20000000',
+            chainId: 1952,
+            settlementContract: '0xdddddddddddddddddddddddddddddddddddddddd',
+            expiry: '1893456000',
+          },
+          quoteId: '0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee',
+          signature: '0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff',
+          assetDecimals: 18,
+          stablecoinDecimals: 6,
+          assetAmount: '0.08',
+          stablecoinAmount: '20',
+          referencePriceUsd: '250.00',
+          expiresAt: '2030-01-01T00:00:00.000Z',
+        };
+      },
+      async reconcilePayment(createdInvoice, input) {
+        return {
+          paymentTxHash: input.txHash,
+          paidAt: '2026-09-17T00:01:00.000Z',
+          buyerAddress: input.buyerAddress,
+          spentAsset: '0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
+          spentAmount: '80000000000000000',
+          stablecoinReceived: createdInvoice.amountUsdt0,
+          quoteId: '0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee',
+          settlementContract: '0xdddddddddddddddddddddddddddddddddddddddd',
+          settlementBlockNumber: '42',
+        };
+      },
+    };
+    const app = createApp(repository, adapter);
+    const buyer = '0x2222222222222222222222222222222222222222';
+    const txHash = '0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef';
+
+    await withServer(app, async (baseUrl) => {
+      const createResponse = await fetch(`${baseUrl}/api/invoices`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ title: 'Coffee beans', amountUsdt0: '20', merchantAddress: MERCHANT }),
+      });
+      const created = (await createResponse.json()) as { invoice: Invoice };
+
+      const quoteResponse = await fetch(`${baseUrl}/api/invoices/${created.invoice.id}/quote`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ buyerAddress: buyer }),
+      });
+      expect(quoteResponse.status).toBe(200);
+
+      const reconcileResponse = await fetch(`${baseUrl}/api/invoices/${created.invoice.id}/reconcile`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ txHash, buyerAddress: buyer }),
+      });
+      const reconciled = (await reconcileResponse.json()) as { invoice: Invoice };
+      expect(reconcileResponse.status).toBe(200);
+      expect(reconciled.invoice.status).toBe('paid');
+      expect(reconciled.invoice.paymentTxHash).toBe(txHash);
+      expect(reconciled.invoice.stablecoinReceived).toBe('20');
+
+      const duplicateResponse = await fetch(`${baseUrl}/api/invoices/${created.invoice.id}/reconcile`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ txHash: '0xabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcd', buyerAddress: buyer }),
+      });
+      expect(duplicateResponse.status).toBe(409);
     });
   });
 });

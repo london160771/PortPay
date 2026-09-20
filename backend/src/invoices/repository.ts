@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 import { databaseConfig, isDatabaseConfigured } from '../config/database.js';
-import type { Invoice, InvoiceRepository } from './types.js';
+import type { Invoice, InvoiceRepository, PaymentEvidence } from './types.js';
 
 export class InvoicePersistenceError extends Error {
   readonly code: string = 'invoice_persistence_failed';
@@ -39,6 +39,28 @@ export class InMemoryInvoiceRepository implements InvoiceRepository {
       .filter((invoice) => invoice.merchantAddress === merchantAddress)
       .sort((left, right) => right.createdAt.localeCompare(left.createdAt));
   }
+
+  async markPaid(id: string, evidence: PaymentEvidence): Promise<Invoice | null> {
+    const invoice = this.invoices.get(id);
+    if (!invoice || invoice.status !== 'pending') return null;
+
+    const updated: Invoice = {
+      ...invoice,
+      status: 'paid',
+      updatedAt: evidence.paidAt,
+      paymentTxHash: evidence.paymentTxHash,
+      paidAt: evidence.paidAt,
+      buyerAddress: evidence.buyerAddress,
+      spentAsset: evidence.spentAsset,
+      spentAmount: evidence.spentAmount,
+      stablecoinReceived: evidence.stablecoinReceived,
+      quoteId: evidence.quoteId,
+      settlementContract: evidence.settlementContract,
+      settlementBlockNumber: evidence.settlementBlockNumber,
+    };
+    this.invoices.set(id, updated);
+    return updated;
+  }
 }
 
 type InvoiceRow = {
@@ -50,6 +72,15 @@ type InvoiceRow = {
   status: Invoice['status'];
   created_at: string;
   updated_at: string;
+  payment_tx_hash: string | null;
+  paid_at: string | null;
+  buyer_address: string | null;
+  spent_asset: string | null;
+  spent_amount: string | null;
+  stablecoin_received: string | null;
+  quote_id: string | null;
+  settlement_contract: string | null;
+  settlement_block_number: string | null;
 };
 
 export class SupabaseInvoiceRepository implements InvoiceRepository {
@@ -91,6 +122,31 @@ export class SupabaseInvoiceRepository implements InvoiceRepository {
     if (error) throw new InvoicePersistenceError();
     return ((data ?? []) as InvoiceRow[]).map(mapInvoiceRow);
   }
+
+  async markPaid(id: string, evidence: PaymentEvidence): Promise<Invoice | null> {
+    const { data, error } = await this.client
+      .from('invoices')
+      .update({
+        status: 'paid',
+        updated_at: evidence.paidAt,
+        payment_tx_hash: evidence.paymentTxHash,
+        paid_at: evidence.paidAt,
+        buyer_address: evidence.buyerAddress,
+        spent_asset: evidence.spentAsset,
+        spent_amount: evidence.spentAmount,
+        stablecoin_received: evidence.stablecoinReceived,
+        quote_id: evidence.quoteId,
+        settlement_contract: evidence.settlementContract,
+        settlement_block_number: evidence.settlementBlockNumber,
+      })
+      .eq('id', id)
+      .eq('status', 'pending')
+      .select('*')
+      .maybeSingle();
+
+    if (error) throw new InvoicePersistenceError();
+    return data ? mapInvoiceRow(data as InvoiceRow) : null;
+  }
 }
 
 function mapInvoiceRow(row: InvoiceRow): Invoice {
@@ -103,6 +159,15 @@ function mapInvoiceRow(row: InvoiceRow): Invoice {
     status: row.status,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
+    ...(row.payment_tx_hash ? { paymentTxHash: row.payment_tx_hash } : {}),
+    ...(row.paid_at ? { paidAt: row.paid_at } : {}),
+    ...(row.buyer_address ? { buyerAddress: row.buyer_address } : {}),
+    ...(row.spent_asset ? { spentAsset: row.spent_asset } : {}),
+    ...(row.spent_amount ? { spentAmount: row.spent_amount } : {}),
+    ...(row.stablecoin_received ? { stablecoinReceived: row.stablecoin_received } : {}),
+    ...(row.quote_id ? { quoteId: row.quote_id } : {}),
+    ...(row.settlement_contract ? { settlementContract: row.settlement_contract } : {}),
+    ...(row.settlement_block_number ? { settlementBlockNumber: row.settlement_block_number } : {}),
   };
 }
 
@@ -116,6 +181,10 @@ class UnconfiguredInvoiceRepository implements InvoiceRepository {
   }
 
   async listByMerchant(): Promise<Invoice[]> {
+    throw new DatabaseNotConfiguredError();
+  }
+
+  async markPaid(): Promise<Invoice | null> {
     throw new DatabaseNotConfiguredError();
   }
 }

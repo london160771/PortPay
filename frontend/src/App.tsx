@@ -4,19 +4,26 @@ import {
   useAccount,
   useConnect,
   useDisconnect,
+  usePublicClient,
   useReadContract,
   useSwitchChain,
+  useWriteContract,
 } from 'wagmi';
 import {
   ApiError,
   createInvoice as createInvoiceRequest,
+  createSettlementQuote,
   getInvoice,
   getMerchantInvoices,
+  reconcileInvoicePayment,
   type Invoice,
+  type SettlementQuote,
 } from './config/api';
 import { erc20BalanceAbi, formatTokenBalance, parseConfiguredAddress, testnetAssets } from './config/assets';
 import { portPayNetworkConfig, xLayerTestnet } from './config/network';
 import { invoiceStatusLabel, readInvoiceRoute, type InvoiceRoute } from './config/invoice';
+import { needsApproval, validatePaymentQuote } from './config/payment';
+import { portPaySettlementAbi, type SettlementWriteQuote } from './config/settlement';
 import { getWalletNetworkState, shortenAddress } from './config/wallet';
 import { okxWalletConnector } from './config/wagmi';
 
@@ -350,13 +357,13 @@ function MerchantDashboard({ onOpenInvoice }: { onOpenInvoice: (invoiceId: strin
       <section className="py-14 sm:py-16">
         <div className="mb-5 inline-flex items-center gap-2 rounded-full bg-mint/70 px-3 py-1.5 text-sm font-semibold text-ink">
           <span className="h-2 w-2 rounded-full bg-emerald-600" />
-          Phase 2 · Merchant invoice flow
+          Phase 3 · Core settlement
         </div>
         <h1 className="max-w-4xl text-5xl font-semibold leading-[1.04] tracking-[-0.06em] sm:text-7xl">
           Turn a product into a shareable payment request.
         </h1>
         <p className="mt-7 max-w-2xl text-lg leading-8 text-ink/65">
-          Create a USD₮0-denominated invoice, share the link, and keep the merchant view open while the future buyer checkout is built.
+          Create a USD₮0-denominated invoice, share the link, and let a buyer settle it with the first PortPay demo asset.
         </p>
       </section>
 
@@ -451,6 +458,366 @@ function MerchantDashboard({ onOpenInvoice }: { onOpenInvoice: (invoiceId: strin
   );
 }
 
+type PaymentStep =
+  | 'idle'
+  | 'loading-quote'
+  | 'awaiting-approval'
+  | 'confirming-approval'
+  | 'awaiting-payment-signature'
+  | 'confirming-payment'
+  | 'reconciling'
+  | 'paid'
+  | 'error';
+
+function displayAmount(value: string): string {
+  return value.includes('.') ? value.replace(/0+$/, '').replace(/\.$/, '') : value;
+}
+
+function paymentErrorMessage(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error);
+  if (/reject|denied|user rejected|cancel/i.test(message)) return 'The wallet signature was rejected. No payment was completed.';
+  if (/insufficient|balance/i.test(message)) return 'This wallet does not have enough DemoAAPL or test OKB for the requested payment.';
+  if (/revert|execution reverted|failed/i.test(message)) return 'The X Layer Testnet transaction was rejected. Check the balance, allowance, quote expiry, and settlement liquidity.';
+  return message || 'The payment could not be completed.';
+}
+
+function BuyerWalletPanel({
+  invoice,
+  onPaid,
+}: {
+  invoice: Invoice;
+  onPaid: (updatedInvoice: Invoice) => void;
+}) {
+  const { address, chainId, isConnected } = useAccount();
+  const { connect, error: connectError, isPending: isConnecting } = useConnect();
+  const { switchChain, error: switchError, isPending: isSwitching } = useSwitchChain();
+  const { writeContractAsync } = useWriteContract();
+  const publicClient = usePublicClient({ chainId: xLayerTestnet.id });
+  const networkState = getWalletNetworkState(isConnected, chainId);
+  const assetAddress = parseConfiguredAddress(testnetAssets.demoAapl.address);
+  const stablecoinAddress = parseConfiguredAddress(testnetAssets.usdt0.address);
+  const settlementAddress = parseConfiguredAddress(portPayNetworkConfig.settlementAddress);
+  const balancesEnabled = networkState === 'ready' && Boolean(address && assetAddress);
+  const { data: demoAaplBalance, isLoading: isBalanceLoading, isError: isBalanceError } = useReadContract({
+    address: assetAddress,
+    abi: erc20BalanceAbi,
+    functionName: 'balanceOf',
+    args: address ? [address] : undefined,
+    chainId: xLayerTestnet.id,
+    query: { enabled: balancesEnabled },
+  });
+  const { data: demoAaplDecimals } = useReadContract({
+    address: assetAddress,
+    abi: erc20BalanceAbi,
+    functionName: 'decimals',
+    chainId: xLayerTestnet.id,
+    query: { enabled: balancesEnabled },
+  });
+  const [quote, setQuote] = useState<SettlementQuote | null>(null);
+  const [quoteLoading, setQuoteLoading] = useState(false);
+  const [quoteError, setQuoteError] = useState('');
+  const [paymentStep, setPaymentStep] = useState<PaymentStep>('idle');
+  const [paymentError, setPaymentError] = useState('');
+  const [confirmedPaymentHash, setConfirmedPaymentHash] = useState('');
+  const isBusy = ['loading-quote', 'awaiting-approval', 'confirming-approval', 'awaiting-payment-signature', 'confirming-payment', 'reconciling'].includes(paymentStep);
+
+  async function refreshQuote() {
+    if (!address || networkState !== 'ready') return;
+    setQuoteLoading(true);
+    setQuoteError('');
+    setPaymentError('');
+    setPaymentStep('loading-quote');
+    try {
+      const result = await createSettlementQuote(invoice.id, address);
+      setQuote(result.quote);
+      setPaymentStep('idle');
+    } catch (error) {
+      setQuote(null);
+      setPaymentStep('error');
+      setQuoteError(error instanceof ApiError ? error.message : 'Unable to prepare a settlement quote.');
+    } finally {
+      setQuoteLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    if (invoice.status !== 'pending' || !address || networkState !== 'ready') {
+      setQuote(null);
+      setQuoteError('');
+      return;
+    }
+
+    let active = true;
+    setQuoteLoading(true);
+    setQuoteError('');
+    setPaymentError('');
+    setPaymentStep('loading-quote');
+    createSettlementQuote(invoice.id, address)
+      .then((result) => {
+        if (active) {
+          setQuote(result.quote);
+          setPaymentStep('idle');
+        }
+      })
+      .catch((error: unknown) => {
+        if (active) {
+          setQuote(null);
+          setPaymentStep('error');
+          setQuoteError(error instanceof ApiError ? error.message : 'Unable to prepare a settlement quote.');
+        }
+      })
+      .finally(() => {
+        if (active) setQuoteLoading(false);
+      });
+
+    return () => {
+      active = false;
+    };
+  }, [address, invoice.id, invoice.status, networkState]);
+
+  async function reconcileConfirmed(txHash: `0x${string}`) {
+    if (!address) return false;
+    setPaymentStep('reconciling');
+    try {
+      const result = await reconcileInvoicePayment(invoice.id, { txHash, buyerAddress: address });
+      onPaid(result.invoice);
+      setPaymentStep('paid');
+      setPaymentError('');
+      return true;
+    } catch (error) {
+      setPaymentStep('error');
+      setPaymentError(
+        error instanceof ApiError
+          ? `The transaction is confirmed, but invoice reconciliation is pending: ${error.message}`
+          : 'The transaction is confirmed, but the backend could not reconcile the invoice yet.',
+      );
+      return false;
+    }
+  }
+
+  async function payInvoice() {
+    if (!address || !publicClient || !quote || !assetAddress || !stablecoinAddress || !settlementAddress) {
+      setPaymentError('Connect the buyer wallet, configure the deployed contracts, and prepare a quote first.');
+      return;
+    }
+    if (networkState !== 'ready') {
+      setPaymentError('Switch the buyer wallet to X Layer Testnet before signing.');
+      return;
+    }
+    if (confirmedPaymentHash) {
+      setPaymentError('A settlement was already submitted. Check that transaction before trying another payment.');
+      return;
+    }
+    const quoteError = validatePaymentQuote(quote, address, assetAddress, stablecoinAddress, settlementAddress);
+    if (quoteError) {
+      setPaymentError(quoteError);
+      return;
+    }
+    if (demoAaplBalance === undefined) {
+      setPaymentError('DemoAAPL balance is still loading. Try again when the balance is available.');
+      return;
+    }
+
+    const requiredAssetAmount = BigInt(quote.quote.assetAmount);
+    if (demoAaplBalance < requiredAssetAmount) {
+      setPaymentError(`Insufficient DemoAAPL balance. This payment needs ${displayAmount(quote.assetAmount)} DemoAAPL.`);
+      return;
+    }
+
+    setPaymentError('');
+    try {
+      const allowance = await publicClient.readContract({
+        address: assetAddress,
+        abi: erc20BalanceAbi,
+        functionName: 'allowance',
+        args: [address, settlementAddress],
+      });
+      if (needsApproval(allowance, requiredAssetAmount)) {
+        setPaymentStep('awaiting-approval');
+        const approvalHash = await writeContractAsync({
+          account: address,
+          address: assetAddress,
+          abi: erc20BalanceAbi,
+          functionName: 'approve',
+          args: [settlementAddress, requiredAssetAmount],
+          chainId: xLayerTestnet.id,
+        });
+        setPaymentStep('confirming-approval');
+        const approvalReceipt = await publicClient.waitForTransactionReceipt({ hash: approvalHash });
+        if (approvalReceipt.status !== 'success') throw new Error('The DemoAAPL approval transaction failed.');
+      }
+      if (validatePaymentQuote(quote, address, assetAddress, stablecoinAddress, settlementAddress)) {
+        setPaymentStep('error');
+        setPaymentError('The quote is no longer valid after approval. Refresh it before paying.');
+        return;
+      }
+
+      setPaymentStep('awaiting-payment-signature');
+      const writeQuote: SettlementWriteQuote = {
+        invoiceId: quote.quote.invoiceId,
+        buyer: quote.quote.buyer,
+        merchant: quote.quote.merchant,
+        asset: quote.quote.asset,
+        assetAmount: BigInt(quote.quote.assetAmount),
+        stablecoin: quote.quote.stablecoin,
+        stablecoinAmount: BigInt(quote.quote.stablecoinAmount),
+        chainId: BigInt(quote.quote.chainId),
+        settlementContract: quote.quote.settlementContract,
+        expiry: BigInt(quote.quote.expiry),
+      };
+      const settlementHash = await writeContractAsync({
+        account: address,
+        address: settlementAddress,
+        abi: portPaySettlementAbi,
+        functionName: 'settle',
+        args: [writeQuote, quote.signature],
+        chainId: xLayerTestnet.id,
+      });
+      setConfirmedPaymentHash(settlementHash);
+      setPaymentStep('confirming-payment');
+      const settlementReceipt = await publicClient.waitForTransactionReceipt({ hash: settlementHash });
+      if (settlementReceipt.status !== 'success') {
+        setConfirmedPaymentHash('');
+        throw new Error('The PortPay settlement transaction failed.');
+      }
+      await reconcileConfirmed(settlementHash);
+    } catch (error) {
+      setPaymentStep('error');
+      setPaymentError(paymentErrorMessage(error));
+    }
+  }
+
+  async function retrySubmittedPayment() {
+    if (!publicClient || !confirmedPaymentHash) return;
+    setPaymentStep('confirming-payment');
+    setPaymentError('');
+    try {
+      const receipt = await publicClient.waitForTransactionReceipt({ hash: confirmedPaymentHash as `0x${string}` });
+      if (receipt.status !== 'success') {
+        setConfirmedPaymentHash('');
+        throw new Error('The PortPay settlement transaction failed.');
+      }
+      await reconcileConfirmed(confirmedPaymentHash as `0x${string}`);
+    } catch (error) {
+      setPaymentStep('error');
+      setPaymentError(paymentErrorMessage(error));
+    }
+  }
+
+  const hasEnoughDemoAapl = quote && demoAaplBalance !== undefined && demoAaplBalance >= BigInt(quote.quote.assetAmount);
+  const formattedBuyerBalance = formatTokenBalance(demoAaplBalance, demoAaplDecimals);
+
+  return (
+    <section className="mt-10 border-t border-ink/10 pt-8">
+      <div className="flex flex-col gap-4 rounded-2xl bg-ink p-5 text-white sm:flex-row sm:items-center sm:justify-between">
+        <div>
+          <p className="text-xs font-semibold uppercase tracking-[0.16em] text-mint/75">Buyer checkout</p>
+          <p className="mt-2 text-lg font-semibold">Pay with DemoAAPL on X Layer Testnet</p>
+          <p className="mt-1 text-sm leading-6 text-white/55">Test asset only · not backed by real Apple shares.</p>
+        </div>
+        <span className="w-fit rounded-full bg-mint px-3 py-1 text-xs font-bold text-ink">CHAIN 1952</span>
+      </div>
+
+      {!isConnected ? (
+        <div className="mt-5 rounded-2xl border border-ink/10 bg-cloud p-5">
+          <p className="text-sm leading-6 text-ink/60">Connect the buyer wallet to receive a signed quote for this invoice.</p>
+          <button
+            type="button"
+            className="mt-4 rounded-xl bg-ink px-5 py-3 text-sm font-bold text-white transition hover:bg-ink/80 disabled:cursor-wait disabled:opacity-60"
+            onClick={() => connect({ connector: okxWalletConnector })}
+            disabled={isConnecting}
+          >
+            {isConnecting ? 'Opening OKX Wallet…' : 'Connect OKX Wallet'}
+          </button>
+          {connectError ? <p className="mt-3 text-sm text-rose-700">{connectError.message}</p> : null}
+        </div>
+      ) : networkState === 'wrong-network' ? (
+        <div className="mt-5 rounded-2xl border border-amber-200 bg-amber-50 p-5">
+          <p className="text-sm font-semibold text-amber-950">Switch networks before paying.</p>
+          <p className="mt-1 text-xs leading-5 text-amber-900/70">Connected chain: {chainId ?? 'unknown'} · required chain: 1952.</p>
+          <button
+            type="button"
+            className="mt-4 rounded-xl bg-amber-200 px-4 py-2.5 text-sm font-bold text-amber-950 transition hover:bg-white disabled:cursor-wait disabled:opacity-60"
+            onClick={() => switchChain({ chainId: xLayerTestnet.id })}
+            disabled={isSwitching}
+          >
+            {isSwitching ? 'Switching network…' : 'Switch to X Layer Testnet'}
+          </button>
+          {switchError ? <p className="mt-3 text-sm text-rose-700">{switchError.message}</p> : null}
+        </div>
+      ) : (
+        <>
+          <div className="mt-5 flex flex-col gap-2 rounded-2xl border border-ink/10 bg-cloud p-5 sm:flex-row sm:items-center sm:justify-between">
+            <div>
+              <p className="text-sm font-semibold text-ink">Buyer wallet connected</p>
+              <p className="mt-1 font-mono text-xs text-ink/55">{shortenAddress(address!)}</p>
+            </div>
+            <p className="text-sm text-ink/55">DemoAAPL balance: {formattedBuyerBalance ?? (isBalanceLoading ? 'reading…' : '—')}</p>
+          </div>
+
+          <div className="mt-5 rounded-2xl border border-ink/10 bg-mint/35 p-5">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <p className="text-xs font-semibold uppercase tracking-[0.16em] text-ink/50">Exact payment quote</p>
+              {quote ? <span className="text-xs font-semibold text-ink/50">Valid until {new Date(quote.expiresAt).toLocaleTimeString()}</span> : null}
+            </div>
+            {quoteLoading ? (
+              <p className="mt-5 text-sm font-semibold text-ink/55">Preparing a short-lived quote…</p>
+            ) : quote ? (
+              <div className="mt-5 grid gap-3 sm:grid-cols-2">
+                <div className="rounded-xl bg-white/80 p-4">
+                  <p className="text-xs font-semibold uppercase tracking-[0.14em] text-ink/45">You spend</p>
+                  <p className="mt-2 text-2xl font-semibold">{displayAmount(quote.assetAmount)} <span className="text-sm text-ink/50">DemoAAPL</span></p>
+                </div>
+                <div className="rounded-xl bg-white/80 p-4">
+                  <p className="text-xs font-semibold uppercase tracking-[0.14em] text-ink/45">Merchant receives</p>
+                  <p className="mt-2 text-2xl font-semibold">{displayAmount(quote.stablecoinAmount)} <span className="text-sm text-ink/50">USD₮0</span></p>
+                </div>
+                <p className="sm:col-span-2 text-xs leading-5 text-ink/55">Demo reference price: {quote.referencePriceUsd} USD per DemoAAPL · token decimals read: {quote.assetDecimals}/{quote.stablecoinDecimals}. No oracle or live market price is used.</p>
+              </div>
+            ) : (
+              <p className="mt-5 text-sm leading-6 text-ink/55">A quote will appear after the backend and deployed testnet contracts are configured.</p>
+            )}
+          </div>
+
+          {quoteError ? <p className="mt-4 rounded-xl bg-rose-50 px-4 py-3 text-sm text-rose-700">{quoteError}</p> : null}
+          {paymentError ? <p className="mt-4 rounded-xl bg-rose-50 px-4 py-3 text-sm leading-6 text-rose-700">{paymentError}</p> : null}
+          {isBalanceError ? <p className="mt-4 rounded-xl bg-rose-50 px-4 py-3 text-sm text-rose-700">DemoAAPL balance could not be read from the configured token.</p> : null}
+
+          <div className="mt-5 flex flex-col gap-3 sm:flex-row sm:items-center">
+            <button
+              type="button"
+              className="rounded-xl bg-ink px-5 py-3 text-sm font-bold text-white transition hover:bg-ink/80 disabled:cursor-not-allowed disabled:opacity-40"
+              onClick={payInvoice}
+              disabled={isBusy || Boolean(confirmedPaymentHash) || !quote || !hasEnoughDemoAapl || isBalanceLoading}
+            >
+              {paymentStep === 'awaiting-approval' ? 'Approve DemoAAPL in wallet…' : paymentStep === 'confirming-approval' ? 'Confirming approval…' : paymentStep === 'awaiting-payment-signature' ? 'Confirm payment in wallet…' : paymentStep === 'confirming-payment' ? 'Confirming settlement…' : paymentStep === 'reconciling' ? 'Verifying payment…' : paymentStep === 'paid' ? 'Payment received' : 'Approve and pay'}
+            </button>
+            <button
+              type="button"
+              className="rounded-xl border border-ink/15 px-4 py-3 text-sm font-semibold text-ink/70 transition hover:border-ink/40 hover:text-ink disabled:cursor-wait disabled:opacity-50"
+              onClick={() => void refreshQuote()}
+              disabled={isBusy || quoteLoading}
+            >
+              Refresh quote
+            </button>
+          </div>
+
+          {confirmedPaymentHash && paymentStep === 'error' ? (
+            <button
+              type="button"
+              className="mt-4 text-sm font-semibold text-ink underline underline-offset-4"
+              onClick={() => void retrySubmittedPayment()}
+            >
+              Check submitted transaction and reconcile
+            </button>
+          ) : null}
+          {paymentStep === 'paid' ? <p className="mt-4 text-sm font-semibold text-emerald-700">Confirmed on X Layer Testnet. The invoice status is now paid from verified settlement evidence.</p> : null}
+        </>
+      )}
+    </section>
+  );
+}
+
 function InvoiceDetailPage({ invoiceId, onBack }: { invoiceId: string; onBack: () => void }) {
   const [invoice, setInvoice] = useState<Invoice | null>(null);
   const [isLoading, setIsLoading] = useState(Boolean(invoiceId));
@@ -468,6 +835,7 @@ function InvoiceDetailPage({ invoiceId, onBack }: { invoiceId: string; onBack: (
 
     setIsLoading(true);
     setError('');
+    setInvoice(null);
     getInvoice(invoiceId)
       .then((result) => {
         if (active) setInvoice(result.invoice);
@@ -512,7 +880,7 @@ function InvoiceDetailPage({ invoiceId, onBack }: { invoiceId: string; onBack: (
         ) : invoice ? (
           <div className="pt-12">
             <div className="flex flex-wrap items-center justify-between gap-3">
-              <p className="text-xs font-semibold uppercase tracking-[0.16em] text-ink/45">PortPay invoice</p>
+              <p className="text-xs font-semibold uppercase tracking-[0.16em] text-ink/45">PortPay checkout</p>
               <InvoiceStatusPill status={invoice.status} />
             </div>
             <h1 className="mt-4 text-4xl font-semibold tracking-tight">{invoice.title}</h1>
@@ -524,10 +892,31 @@ function InvoiceDetailPage({ invoiceId, onBack }: { invoiceId: string; onBack: (
               <p className="text-sm font-semibold">{invoiceStatusLabel(invoice.status)}</p>
               <p className="mt-2 text-sm leading-6 text-ink/55">
                 {invoice.status === 'paid'
-                  ? 'This status is read from the persisted invoice record.'
-                  : 'Keep this invoice open while waiting for the future buyer checkout flow. No payment action is enabled in this phase.'}
+                  ? 'This status is read from a confirmed PortPay settlement event on X Layer Testnet.'
+                  : 'Review the exact quote below, then approve DemoAAPL and confirm the settlement in OKX Wallet.'}
               </p>
             </div>
+
+            {invoice.status === 'pending' ? <BuyerWalletPanel invoice={invoice} onPaid={setInvoice} /> : null}
+
+            {invoice.status === 'paid' ? (
+              <div className="mt-8 rounded-2xl border border-emerald-200 bg-emerald-50 p-5">
+                <p className="text-xs font-semibold uppercase tracking-[0.14em] text-emerald-800">Settlement confirmed</p>
+                <p className="mt-3 text-sm leading-6 text-emerald-950">
+                  Buyer spent {invoice.spentAmount ? `${invoice.spentAmount} raw DemoAAPL units` : 'DemoAAPL'} and the merchant received exactly {invoice.amountUsdt0} USD₮0.
+                </p>
+                {invoice.paymentTxHash ? (
+                  <a
+                    className="mt-4 inline-block text-sm font-semibold text-emerald-800 underline underline-offset-4"
+                    href={`${portPayNetworkConfig.explorerUrl}/tx/${invoice.paymentTxHash}`}
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    View confirmed transaction on X Layer Explorer
+                  </a>
+                ) : null}
+              </div>
+            ) : null}
 
             <dl className="mt-8 space-y-4 border-t border-ink/10 pt-6 text-sm">
               <div className="flex justify-between gap-4">
@@ -560,7 +949,7 @@ function AppShell({ children }: { children: React.ReactNode }) {
             <span className="text-lg font-semibold tracking-tight">PortPay</span>
           </div>
           <span className="rounded-full border border-ink/10 bg-white/70 px-4 py-2 text-xs font-semibold uppercase tracking-[0.18em] text-ink/60">
-            Merchant invoice flow
+            Merchant + buyer settlement
           </span>
         </header>
 
@@ -568,7 +957,7 @@ function AppShell({ children }: { children: React.ReactNode }) {
 
         <footer className="flex flex-col gap-2 border-t border-ink/10 py-5 text-sm text-ink/45 sm:flex-row sm:items-center sm:justify-between">
           <span>PortPay · X Layer Testnet</span>
-          <span>Phase 2 merchant invoices only · no buyer checkout or payment action yet.</span>
+          <span>Phase 3 testnet settlement · DemoAAPL only.</span>
         </footer>
       </div>
     </main>

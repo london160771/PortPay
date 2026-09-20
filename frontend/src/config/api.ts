@@ -9,6 +9,40 @@ export type Invoice = {
   status: InvoiceStatus;
   createdAt: string;
   updatedAt: string;
+  paymentTxHash?: string;
+  paidAt?: string;
+  buyerAddress?: string;
+  spentAsset?: string;
+  spentAmount?: string;
+  stablecoinReceived?: string;
+  quoteId?: string;
+  settlementContract?: string;
+  settlementBlockNumber?: string;
+};
+
+export type SettlementQuote = {
+  invoiceId: string;
+  invoiceIdHash: `0x${string}`;
+  quote: {
+    invoiceId: `0x${string}`;
+    buyer: `0x${string}`;
+    merchant: `0x${string}`;
+    asset: `0x${string}`;
+    assetAmount: string;
+    stablecoin: `0x${string}`;
+    stablecoinAmount: string;
+    chainId: number;
+    settlementContract: `0x${string}`;
+    expiry: string;
+  };
+  quoteId: `0x${string}`;
+  signature: `0x${string}`;
+  assetDecimals: number;
+  stablecoinDecimals: number;
+  assetAmount: string;
+  stablecoinAmount: string;
+  referencePriceUsd: string;
+  expiresAt: string;
 };
 
 export class ApiError extends Error {
@@ -64,4 +98,21 @@ export function getMerchantInvoices(merchantAddress: string): Promise<{ invoices
 
 export function getInvoice(invoiceId: string): Promise<{ invoice: Invoice }> {
   return request<{ invoice: Invoice }>(`/api/invoices/${encodeURIComponent(invoiceId)}`);
+}
+
+export function createSettlementQuote(invoiceId: string, buyerAddress: string): Promise<{ quote: SettlementQuote }> {
+  return request<{ quote: SettlementQuote }>(`/api/invoices/${encodeURIComponent(invoiceId)}/quote`, {
+    method: 'POST',
+    body: JSON.stringify({ buyerAddress }),
+  });
+}
+
+export function reconcileInvoicePayment(
+  invoiceId: string,
+  input: { txHash: string; buyerAddress: string },
+): Promise<{ invoice: Invoice }> {
+  return request<{ invoice: Invoice }>(`/api/invoices/${encodeURIComponent(invoiceId)}/reconcile`, {
+    method: 'POST',
+    body: JSON.stringify(input),
+  });
 }

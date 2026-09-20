@@ -9,6 +9,7 @@ export class InvoiceValidationError extends Error {
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const WALLET_ADDRESS_PATTERN = /^0x[a-fA-F0-9]{40}$/;
+const TRANSACTION_HASH_PATTERN = /^0x[a-fA-F0-9]{64}$/;
 const AMOUNT_PATTERN = /^(?:0|[1-9]\d*)(?:\.\d{1,6})?$/;
 
 export type CreateInvoiceInput = {
@@ -31,6 +32,14 @@ export function validateMerchantAddress(value: unknown): string {
   }
 
   return value.trim().toLowerCase();
+}
+
+export function validateTransactionHash(value: unknown): `0x${string}` {
+  if (typeof value !== 'string' || !TRANSACTION_HASH_PATTERN.test(value.trim())) {
+    throw new InvoiceValidationError('Transaction hash must be a valid 32-byte hash.');
+  }
+
+  return value.trim().toLowerCase() as `0x${string}`;
 }
 
 export function validateCreateInvoiceInput(input: unknown): CreateInvoiceInput {
