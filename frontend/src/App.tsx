@@ -37,6 +37,7 @@ import {
   DEFAULT_TARGET_ALLOCATION_BPS,
   formatAllocationPercent,
   recommendSmartSpend,
+  snapshotSmartSpendChoice,
   type SmartSpendAssetKey,
   type TargetAllocationBps,
 } from './config/smartSpend';
@@ -93,7 +94,7 @@ function TokenBalanceCard({ asset, account, canRead }: TokenBalanceCardProps) {
   }
 
   return (
-    <article className="portpay-appear rounded-3xl border border-ink/10 bg-paper p-5 shadow-panel transition hover:-translate-y-0.5 hover:shadow-soft">
+    <article className="portpay-appear rounded-3xl border border-ink/10 bg-paper p-5 text-ink shadow-panel transition hover:-translate-y-0.5 hover:shadow-soft">
       <div className="flex items-start justify-between gap-4">
         <div>
           <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-ink/45">Wallet balance</p>
@@ -453,13 +454,14 @@ function PaymentHistoryPanel({
                 <div className="mt-4 rounded-xl border border-ink/10 bg-white/70 p-3 text-xs leading-5 text-ink/60">
                   {payment.smartSpendUsed ? (
                     <>
-                      <span className="font-semibold text-ink">Smart Spend used</span>
+                      <span className="font-semibold text-ink">Smart Spend selected in checkout</span>
                       {payment.smartSpendRecommendedAsset ? ` · ${portfolioAssets[payment.smartSpendRecommendedAsset].label}` : ''}
                       {payment.smartSpendReason ? <span className="block">{payment.smartSpendReason}</span> : null}
                     </>
                   ) : (
-                    <span><span className="font-semibold text-ink">Manual asset selection</span> · Smart Spend was not used.</span>
+                    <span><span className="font-semibold text-ink">Manual asset selection in checkout</span> · Smart Spend was not used.</span>
                   )}
+                  <span className="mt-1 block">Choice and reason are checkout-reported; the settlement receipt verifies the asset and amounts.</span>
                 </div>
                 <div className="mt-4 flex flex-col gap-2 border-t border-ink/10 pt-3 text-xs text-ink/50 sm:flex-row sm:items-center sm:justify-between">
                   <span className="font-mono">{payment.paymentTxHash ? `${payment.paymentTxHash.slice(0, 10)}…${payment.paymentTxHash.slice(-8)}` : 'Transaction evidence unavailable'}</span>
@@ -720,7 +722,8 @@ function BuyerWalletPanel({
   const publicClient = usePublicClient({ chainId: xLayerTestnet.id });
   const networkState = getWalletNetworkState(isConnected, chainId);
   const [selectedAssetKey, setSelectedAssetKey] = useState<SmartSpendAssetKey>('demoAapl');
-  const [smartSpendApplied, setSmartSpendApplied] = useState(false);
+  const [appliedSmartSpend, setAppliedSmartSpend] = useState<ReturnType<typeof snapshotSmartSpendChoice>>(undefined);
+  const smartSpendApplied = Boolean(appliedSmartSpend);
   const [targetAllocation, setTargetAllocation] = useState<TargetAllocationBps>(DEFAULT_TARGET_ALLOCATION_BPS);
   const assetAddress = parseConfiguredAddress(portfolioAssets[selectedAssetKey].address);
   const demoAaplAddress = parseConfiguredAddress(portfolioAssets.demoAapl.address);
@@ -847,15 +850,16 @@ function BuyerWalletPanel({
 
   function selectManualAsset(assetKey: SmartSpendAssetKey) {
     setSelectedAssetKey(assetKey);
-    setSmartSpendApplied(false);
+    setAppliedSmartSpend(undefined);
     setQuote(null);
     setQuoteError('');
   }
 
   function applySmartSpend() {
-    if (!smartSpendRecommendation.assetKey) return;
-    setSelectedAssetKey(smartSpendRecommendation.assetKey);
-    setSmartSpendApplied(true);
+    const choice = snapshotSmartSpendChoice(smartSpendRecommendation);
+    if (!choice) return;
+    setSelectedAssetKey(choice.assetKey);
+    setAppliedSmartSpend(choice);
     setQuote(null);
     setQuoteError('');
   }
@@ -873,11 +877,11 @@ function BuyerWalletPanel({
       const result = await reconcileInvoicePayment(invoice.id, {
         txHash,
         buyerAddress: address,
-        smartSpendUsed: smartSpendApplied,
-        ...(smartSpendApplied && smartSpendRecommendation.assetKey
+        smartSpendUsed: Boolean(appliedSmartSpend),
+        ...(appliedSmartSpend
           ? {
-              smartSpendRecommendedAsset: smartSpendRecommendation.assetKey,
-              smartSpendReason: smartSpendRecommendation.reason,
+              smartSpendRecommendedAsset: appliedSmartSpend.assetKey,
+              smartSpendReason: appliedSmartSpend.reason,
             }
           : {}),
       });
@@ -1414,13 +1418,14 @@ function PaymentReceipt({ invoice }: { invoice: Invoice }) {
         <div className="mt-4 rounded-xl border border-emerald-900/10 bg-white/60 px-3 py-2 text-xs leading-5 text-emerald-900/70">
           {invoice.smartSpendUsed ? (
             <>
-              <span className="font-semibold text-emerald-950">Smart Spend used</span>
+              <span className="font-semibold text-emerald-950">Smart Spend selected in checkout</span>
               {invoice.smartSpendRecommendedAsset ? ` · ${portfolioAssets[invoice.smartSpendRecommendedAsset].label}` : ''}
               {invoice.smartSpendReason ? <span className="block">{invoice.smartSpendReason}</span> : null}
             </>
           ) : (
-            <span><span className="font-semibold text-emerald-950">Manual asset selection</span> · Smart Spend was not used.</span>
+            <span><span className="font-semibold text-emerald-950">Manual asset selection in checkout</span> · Smart Spend was not used.</span>
           )}
+          <span className="mt-1 block">Choice and reason are checkout-reported; the settlement receipt verifies the asset and amounts.</span>
         </div>
       </div>
     </section>

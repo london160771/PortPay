@@ -59,9 +59,14 @@ export class ApiError extends Error {
   }
 }
 
-const backendUrl = (import.meta.env.VITE_BACKEND_URL || 'http://localhost:3001').replace(/\/$/, '');
+export function resolveBackendUrl(configuredUrl: string | undefined, production: boolean): string {
+  const url = configuredUrl?.trim();
+  if (!url && production) throw new ApiError('VITE_BACKEND_URL is required for a production build.', 0);
+  return (url || 'http://localhost:3001').replace(/\/$/, '');
+}
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
+  const backendUrl = resolveBackendUrl(import.meta.env.VITE_BACKEND_URL, import.meta.env.PROD);
   let response: Response;
   try {
     response = await fetch(`${backendUrl}${path}`, {

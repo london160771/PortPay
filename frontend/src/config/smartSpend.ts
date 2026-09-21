@@ -33,6 +33,14 @@ export type SmartSpendRecommendation = {
   allocations: PortfolioAllocation[];
 };
 
+export function snapshotSmartSpendChoice(
+  recommendation: SmartSpendRecommendation,
+): { assetKey: SmartSpendAssetKey; reason: string } | undefined {
+  return recommendation.assetKey
+    ? { assetKey: recommendation.assetKey, reason: recommendation.reason }
+    : undefined;
+}
+
 const USD_PRICE_DECIMALS = 6;
 const BPS = 10_000n;
 

@@ -6,7 +6,7 @@ PortPay is a payment-layer foundation for paying with tokenized portfolio assets
 
 ## Current project status
 
-**Phase 7 — Product polish and final submission readiness: the merchant/buyer demo, receipt, Smart Spend, and Smart Payment History surfaces have been polished for final review. GPT-5.6 Sol High Checkpoint C remains required before final submission or any mainnet test.**
+**Phase 7 — Product polish and final submission readiness: the merchant/buyer demo, receipt, Smart Spend, and Smart Payment History surfaces are complete. GPT-5.6 Sol High Checkpoint C was performed on 2026-09-21; review fixes are uncommitted and a final human two-tab wallet check remains before submission. No mainnet test is approved or required.**
 
 The repository now contains independent frontend, backend, and Foundry contract workspaces, an OKX Wallet-aware merchant dashboard, Supabase/Postgres-backed invoice persistence, unique shareable invoice links, a buyer checkout for DemoAAPL and DemoNVDA, signed short-lived multi-asset settlement quotes, the two-asset `PortPaySettlement` contract, verified-event invoice reconciliation, transaction-backed payment receipts, paid-only Smart Payment History for buyer and merchant views, and deterministic Smart Spend recommendations. No mainnet functionality is required or configured.
 
@@ -164,12 +164,13 @@ Copy-Item backend/.env.example backend/.env
 The examples contain no secrets. Keep populated `.env` files local and never commit private keys, seed phrases, Supabase secrets, API credentials, or mainnet credentials.
 
 Frontend variables are prefixed with `VITE_` because Vite exposes them to browser code. Backend variables remain server-side. `VITE_BACKEND_URL`, `PUBLIC_APP_URL`, `SUPABASE_URL`, and `SUPABASE_SERVICE_ROLE_KEY` must be configured for a live invoice demo. `DATABASE_URL` is retained for Supabase/Postgres migration tooling. Do not expose the service-role key to the frontend.
+Production frontend deployments must set `VITE_BACKEND_URL` at build time; API requests fail clearly when it is omitted. Production backend startup requires explicit `PUBLIC_APP_URL` and `CORS_ORIGIN`. Localhost defaults apply only to development, so check all three public origins when deploying the two-tab demo.
 
 The Phase 3/5 backend also requires `QUOTE_SIGNER_PRIVATE_KEY`, `DEMO_AAPL_REFERENCE_PRICE_USD` (default `250.00` demo USD), `DEMO_NVDA_REFERENCE_PRICE_USD` (default `180.00` demo USD), and `QUOTE_TTL_SECONDS` (default `300`, allowed range `1`–`300`). The quote signer address must match `QUOTE_SIGNER_ADDRESS` used when deploying `PortPaySettlement`. The private key is server-only and must never be placed in the frontend environment.
 
 For Phase 6, set `VITE_PORTPAY_BUILDER_CODE` to a 16-character code registered on the official testnet registry with payout address `0xbabdfef588cf57efcc7c8857960e3ccdd9167589`. The current local value is the already registered `kob1lkgsg6infkg3`; checkout verifies it through an explicit X Layer Testnet public client and chain-1952 check before approval. Builder Codes are public identifiers, not secrets. Verify future transactions on [OKLink](https://www.oklink.com/x-layer-testnet) by checking the ERC-8021 calldata suffix, then read `payoutAddress(uint256)` from the official testnet registry.
 
-For contracts, copy `contracts/.env.example` to `contracts/.env` only when using the deployment or minting scripts. Keep `PRIVATE_KEY` populated only in that local untracked file. The frontend and backend examples contain the verified testnet USD₮0 address; `DemoAAPL` remains blank until a testnet deployment is made.
+For contracts, copy `contracts/.env.example` to `contracts/.env` only when using the deployment or minting scripts. Keep `PRIVATE_KEY` populated only in that local untracked file. The frontend and backend examples include the verified testnet USD₮0, DemoAAPL, DemoNVDA, settlement, and registered Builder Code values. The Foundry deployment template keeps newly deployed addresses blank until each script run supplies them.
 
 ### Supabase/Postgres setup
 
@@ -335,6 +336,7 @@ The Phase 7 product pass is presentation-only. It preserves the existing settlem
 - A quote signer private key is required server-side; it must correspond to the signer configured in the deployed settlement contract. Whoever controls that key can authorize spending the contract's prefunded USD₮0 balance through valid quotes, so use a dedicated restricted demo key and protect it as a settlement authority. Changing the signer requires a new settlement deployment.
 - DemoAAPL and DemoNVDA quote math uses explicit `250.00 USD` and `180.00 USD` demo reference prices. Asset amounts are rounded upward in base units so the quoted amount fully covers the exact USD₮0 invoice; this is demo math, not market data or an oracle.
 - Smart Spend defaults to a 50/50 DemoAAPL/DemoNVDA target, uses onchain balances and configured demo prices, prefers an eligible overweight asset that can cover the full invoice, and never auto-executes. It is not financial advice.
+- Smart Spend choice and reason in receipts/history are checkout-reported offchain metadata; the backend checks a reported recommended asset against the onchain settlement asset, but cannot independently prove that the buyer used the recommendation or that the reason matched an earlier portfolio snapshot. Settlement asset and amounts are verified from the canonical receipt.
 - Settlement liquidity must be funded manually with official testnet USD₮0 before a buyer can pay again.
 - The merchant wallet address is supplied by the connected frontend wallet but is not cryptographically authenticated by the Phase 2 API; authentication/authorization is deferred.
 - The Supabase migration enables row-level security and the backend uses the server-only service-role key. No browser client or direct anon-key database access is enabled.
@@ -347,4 +349,4 @@ The Phase 7 product pass is presentation-only. It preserves the existing settlem
 
 ## Source-of-truth and phase discipline
 
-`AGENTS.md` defines repository workflow and approval gates. `PORTPAY_SPEC.md` defines the product, architecture, scope, and phased build plan. Only one named phase may be active at a time. Phase 3 implementation and the first live testnet proof are complete, Phase 4 receipts/history implementation is complete, Phase 5 Smart Spend implementation is complete, Phase 6 Builder Codes is closed with verified attributed settlement evidence, and Phase 7 product polish is implemented. GPT-5.6 Sol High Checkpoint C remains required before final submission or any mainnet test.
+`AGENTS.md` defines repository workflow and approval gates. `PORTPAY_SPEC.md` defines the product, architecture, scope, and phased build plan. Only one named phase may be active at a time. Phase 3 implementation and the first live testnet proof are complete, Phase 4 receipts/history implementation is complete, Phase 5 Smart Spend implementation is complete, Phase 6 Builder Codes is closed with verified attributed settlement evidence, and Phase 7 product polish is implemented. Checkpoint C review was performed on 2026-09-21; local fixes await approval and the final human two-tab wallet check. Optional Phase 8 requires separate explicit approval and another pre-mainnet review.

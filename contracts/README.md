@@ -2,7 +2,7 @@
 
 This is the independent Solidity/Foundry workspace for PortPay. Phase 3 contains the first clearly labeled testnet portfolio asset, `DemoAAPL`, the minimal `PortPaySettlement` contract, and reproducible deployment, minting, and settlement-funding scripts.
 
-`DemoAAPL` is an ordinary ERC-20 test asset. It is not an official xStock and is not backed by Apple shares. `PortPaySettlement` is a narrowly configured X Layer Testnet portfolio-settlement contract; it is not a DEX, AMM, marketplace, or general vault. `DemoNVDA`, Smart Spend, receipts/history, Builder Codes, and mainnet settlement remain later-phase work.
+`DemoAAPL` and `DemoNVDA` are ordinary ERC-20 test assets, not official xStocks or shares. `PortPaySettlement` is a narrowly configured X Layer Testnet portfolio-settlement contract; it is not a DEX, AMM, marketplace, or general vault. Smart Spend, receipts/history, and Builder Codes are implemented in the frontend/backend; optional mainnet settlement remains future work. See the root README for the current deployed addresses and live evidence.
 
 ## Windows Foundry setup
 
