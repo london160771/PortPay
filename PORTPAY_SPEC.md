@@ -371,6 +371,8 @@ The Phase 3 implementation uses a server-signed EIP-712 quote bound to the invoi
 - Attach the code through the app’s eligible transaction path using the current OKX/ERC-8021 mechanism.
 - Verify attribution on testnet and document it in the README.
 
+Current implementation note (2026-09-21): the frontend uses `ox/erc8021` with `viem` `2.45.0` or higher and attaches `dataSuffix` to DemoAAPL approval and PortPay settlement requests. Independent review of the supplied registration transaction shows that `kob1lkgsg6infkg3` (`lk`) is registered to the buyer payout address and is the current local configuration. Checkout verifies the code through an explicit X Layer Testnet public client and chain-1952 check before a wallet request. A real attributed approval and settlement were verified for invoice `eb2eae24-f8c9-47b4-9a7f-20942fd83e6e`; both decode to `kob1lkgsg6infkg3`, and the settlement receipt reconciled to `paid`. The older `kob1klgsg6infkg3` (`kl`) and temporary page’s `2j3pbm1a4djso11j` are not registered. Testnet evidence is recorded in `README.md`.
+
 **Mandatory GPT-5.6 Sol High review checkpoint:** immediately after Builder Codes integration. Review encoding/attachment, transaction construction, wallet behavior, attribution evidence, and whether every eligible PortPay-generated transaction is covered.
 
 ### Phase 7 — Product polish and final submission readiness

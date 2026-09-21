@@ -1,13 +1,14 @@
 import { createServer } from 'node:http';
 import { describe, expect, it } from 'vitest';
 import { createApp } from '../app.js';
-import { InMemoryInvoiceRepository } from './repository.js';
+import { InMemoryInvoiceRepository, mapInvoiceRow, type InvoiceRow } from './repository.js';
 import type { Invoice } from './types.js';
 import type { SettlementAdapter } from '../settlement/types.js';
 
 const MERCHANT = '0x1111111111111111111111111111111111111111';
 const OTHER_MERCHANT = '0x2222222222222222222222222222222222222222';
 const BUYER = '0x3333333333333333333333333333333333333333';
+const LARGE_INTEGER = '90071992547409930000000000000000000000';
 
 async function withServer<T>(app: ReturnType<typeof createApp>, callback: (baseUrl: string) => Promise<T>) {
   const server = createServer(app);
@@ -27,6 +28,39 @@ async function withServer<T>(app: ReturnType<typeof createApp>, callback: (baseU
 }
 
 describe('merchant invoice API', () => {
+  it('preserves numeric database fields as exact strings beyond JavaScript safe integers', () => {
+    const row = {
+      id: '00000000-0000-4000-8000-000000000099',
+      title: 'Precision regression',
+      amount_usdt0: '9007199254740993.000000',
+      merchant_address: MERCHANT,
+      payment_url: 'http://localhost:5173/invoice/00000000-0000-4000-8000-000000000099',
+      status: 'paid',
+      created_at: '2026-09-17T00:00:00.000Z',
+      updated_at: '2026-09-17T00:00:00.000Z',
+      payment_tx_hash: null,
+      paid_at: null,
+      buyer_address: BUYER,
+      spent_asset: '0x4444444444444444444444444444444444444444',
+      spent_amount: LARGE_INTEGER,
+      stablecoin_received: '9007199254740993.123456',
+      quote_id: null,
+      settlement_contract: null,
+      settlement_block_number: LARGE_INTEGER,
+      smart_spend_used: false,
+      smart_spend_recommended_asset: null,
+      smart_spend_reason: null,
+    } satisfies InvoiceRow;
+    const mapped = mapInvoiceRow(row);
+
+    expect(mapped.amountUsdt0).toBe('9007199254740993.000000');
+    expect(mapped.spentAmount).toBe(LARGE_INTEGER);
+    expect(mapped.stablecoinReceived).toBe('9007199254740993.123456');
+    expect(mapped.settlementBlockNumber).toBe(LARGE_INTEGER);
+    expect(() => mapInvoiceRow({ ...row, spent_amount: Number.MAX_SAFE_INTEGER + 2 }))
+      .toThrow('spent_amount must be returned from Supabase as text');
+  });
+
   it('creates, persists, lists, and resolves an invoice through its payment link ID', async () => {
     const repository = new InMemoryInvoiceRepository();
     const app = createApp(repository);

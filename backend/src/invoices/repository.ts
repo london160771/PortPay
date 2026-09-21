@@ -82,7 +82,7 @@ export class InMemoryInvoiceRepository implements InvoiceRepository {
   }
 }
 
-type InvoiceRow = {
+export type InvoiceRow = {
   id: string;
   title: string;
   amount_usdt0: string | number;
@@ -95,15 +95,38 @@ type InvoiceRow = {
   paid_at: string | null;
   buyer_address: string | null;
   spent_asset: string | null;
-  spent_amount: string | null;
-  stablecoin_received: string | null;
+  spent_amount: string | number | null;
+  stablecoin_received: string | number | null;
   quote_id: string | null;
   settlement_contract: string | null;
-  settlement_block_number: string | null;
+  settlement_block_number: string | number | null;
   smart_spend_used: boolean | null;
   smart_spend_recommended_asset: string | null;
   smart_spend_reason: string | null;
 };
+
+const INVOICE_SELECT = `
+  id,
+  title,
+  amount_usdt0::text,
+  merchant_address,
+  payment_url,
+  status,
+  created_at,
+  updated_at,
+  payment_tx_hash,
+  paid_at,
+  buyer_address,
+  spent_asset,
+  spent_amount::text,
+  stablecoin_received::text,
+  quote_id,
+  settlement_contract,
+  settlement_block_number::text,
+  smart_spend_used,
+  smart_spend_recommended_asset,
+  smart_spend_reason
+`;
 
 export class SupabaseInvoiceRepository implements InvoiceRepository {
   constructor(private readonly client: SupabaseClient) {}
@@ -121,7 +144,7 @@ export class SupabaseInvoiceRepository implements InvoiceRepository {
         created_at: invoice.createdAt,
         updated_at: invoice.updatedAt,
       })
-      .select('*')
+      .select(INVOICE_SELECT)
       .single();
 
     if (error || !data) throw new InvoicePersistenceError();
@@ -129,7 +152,7 @@ export class SupabaseInvoiceRepository implements InvoiceRepository {
   }
 
   async findById(id: string): Promise<Invoice | null> {
-    const { data, error } = await this.client.from('invoices').select('*').eq('id', id).maybeSingle();
+    const { data, error } = await this.client.from('invoices').select(INVOICE_SELECT).eq('id', id).maybeSingle();
     if (error) throw new InvoicePersistenceError();
     return data ? mapInvoiceRow(data as InvoiceRow) : null;
   }
@@ -137,7 +160,7 @@ export class SupabaseInvoiceRepository implements InvoiceRepository {
   async listByMerchant(merchantAddress: string): Promise<Invoice[]> {
     const { data, error } = await this.client
       .from('invoices')
-      .select('*')
+      .select(INVOICE_SELECT)
       .eq('merchant_address', merchantAddress)
       .order('created_at', { ascending: false });
 
@@ -156,7 +179,7 @@ export class SupabaseInvoiceRepository implements InvoiceRepository {
   private async listPaidByAddress(column: 'merchant_address' | 'buyer_address', address: string): Promise<Invoice[]> {
     const { data, error } = await this.client
       .from('invoices')
-      .select('*')
+      .select(INVOICE_SELECT)
       .eq(column, address)
       .eq('status', 'paid')
       .order('paid_at', { ascending: false });
@@ -186,7 +209,7 @@ export class SupabaseInvoiceRepository implements InvoiceRepository {
       })
       .eq('id', id)
       .eq('status', 'pending')
-      .select('*')
+      .select(INVOICE_SELECT)
       .maybeSingle();
 
     if (error) throw new InvoicePersistenceError();
@@ -194,11 +217,25 @@ export class SupabaseInvoiceRepository implements InvoiceRepository {
   }
 }
 
-function mapInvoiceRow(row: InvoiceRow): Invoice {
+function exactNumericText(value: string | number | null, field: string): string | undefined {
+  if (value === null) return undefined;
+  if (typeof value !== 'string') {
+    throw new InvoicePersistenceError(`${field} must be returned from Supabase as text to preserve integer precision.`);
+  }
+  return value;
+}
+
+export function mapInvoiceRow(row: InvoiceRow): Invoice {
+  const amountUsdt0 = exactNumericText(row.amount_usdt0, 'amount_usdt0');
+  const spentAmount = exactNumericText(row.spent_amount, 'spent_amount');
+  const stablecoinReceived = exactNumericText(row.stablecoin_received, 'stablecoin_received');
+  const settlementBlockNumber = exactNumericText(row.settlement_block_number, 'settlement_block_number');
+  if (amountUsdt0 === undefined) throw new InvoicePersistenceError('amount_usdt0 is required.');
+
   return {
     id: row.id,
     title: row.title,
-    amountUsdt0: String(row.amount_usdt0),
+    amountUsdt0,
     merchantAddress: row.merchant_address,
     paymentUrl: row.payment_url,
     status: row.status,
@@ -208,11 +245,11 @@ function mapInvoiceRow(row: InvoiceRow): Invoice {
     ...(row.paid_at ? { paidAt: row.paid_at } : {}),
     ...(row.buyer_address ? { buyerAddress: row.buyer_address } : {}),
     ...(row.spent_asset ? { spentAsset: row.spent_asset } : {}),
-    ...(row.spent_amount ? { spentAmount: row.spent_amount } : {}),
-    ...(row.stablecoin_received ? { stablecoinReceived: row.stablecoin_received } : {}),
+    ...(spentAmount !== undefined ? { spentAmount } : {}),
+    ...(stablecoinReceived !== undefined ? { stablecoinReceived } : {}),
     ...(row.quote_id ? { quoteId: row.quote_id } : {}),
     ...(row.settlement_contract ? { settlementContract: row.settlement_contract } : {}),
-    ...(row.settlement_block_number ? { settlementBlockNumber: row.settlement_block_number } : {}),
+    ...(settlementBlockNumber !== undefined ? { settlementBlockNumber } : {}),
     ...(row.smart_spend_used !== null ? { smartSpendUsed: row.smart_spend_used } : {}),
     ...(row.smart_spend_recommended_asset ? { smartSpendRecommendedAsset: row.smart_spend_recommended_asset } : {}),
     ...(row.smart_spend_reason ? { smartSpendReason: row.smart_spend_reason } : {}),

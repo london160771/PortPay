@@ -42,4 +42,17 @@ describe('payment history formatting', () => {
     expect(formatSpentAmount({ ...paidInvoice, spentAmount: 'not-base-units' })).toBe('Amount unavailable');
     expect(formatPaymentTimestamp('not-a-date')).toBe('Timestamp unavailable');
   });
+
+  it('formats numeric receipt values returned by a database runtime', () => {
+    expect(formatReceivedAmount({ ...paidInvoice, stablecoinReceived: 1 as unknown as string }))
+      .toBe('1 USD₮0');
+  });
+
+  it('formats very large base-unit amounts from exact strings without precision loss', () => {
+    const largeBaseUnits = '90071992547409930000000000000000000000';
+    expect(formatSpentAmount({ ...paidInvoice, spentAmount: largeBaseUnits }))
+      .toBe('90071992547409930000 DemoAAPL');
+    expect(formatSpentAmount({ ...paidInvoice, spentAmount: Number.MAX_SAFE_INTEGER as unknown as string }))
+      .toBe('Amount unavailable');
+  });
 });

@@ -6,13 +6,13 @@ PortPay is a payment-layer foundation for paying with tokenized portfolio assets
 
 ## Current project status
 
-**Phase 5 — Smart Spend: implementation complete and awaiting approval. Phase 6 has not started.**
+**Phase 6 — Builder Codes: registered-code attribution has been verified on X Layer Testnet; GPT-5.6 Sol High Checkpoint B remains required before approval. Phase 7 has not started.**
 
 The repository now contains independent frontend, backend, and Foundry contract workspaces, an OKX Wallet-aware merchant dashboard, Supabase/Postgres-backed invoice persistence, unique shareable invoice links, a buyer checkout for DemoAAPL and DemoNVDA, signed short-lived multi-asset settlement quotes, the two-asset `PortPaySettlement` contract, verified-event invoice reconciliation, transaction-backed payment receipts, paid-only Smart Payment History for buyer and merchant views, and deterministic Smart Spend recommendations. No mainnet functionality is required or configured.
 
 Frontend, backend, and Foundry verification pass locally. Foundry was run from the repository's bundled Windows release in the ignored `contracts/.tools/foundry` directory, so WSL is not required.
 
-Builder Code transaction attachment and `OKXDEXMainnetAdapter` remain deferred. The Phase 3 proof used Supabase/Postgres, a dedicated quote signer, funded testnet contracts, test OKB, and separate buyer/merchant wallets. Phase 5 added and deployed DemoNVDA plus the two-asset settlement contract; a live DemoNVDA payment is not required for this phase and was not performed.
+PortPay now prepares ERC-8021 Builder Code suffixes for eligible browser-wallet approval and settlement transactions and checks registry registration and payout before requesting a wallet signature. The configured code is registered and was verified on a real attributed testnet payment. `OKXDEXMainnetAdapter` remains deferred. The Phase 3 proof used Supabase/Postgres, a dedicated quote signer, funded testnet contracts, test OKB, and separate buyer/merchant wallets. Phase 5 added and deployed DemoNVDA plus the two-asset settlement contract; the Phase 6 live proof used DemoAAPL.
 
 ## Stack
 
@@ -122,6 +122,34 @@ The Phase 5 multi-asset contracts were deployed on 2026-09-20 to X Layer Testnet
 | Settlement funding | `2 USD₮0` via [`0x1a758323c35d8208d44f16e4a54b15aef8a9fdaff47f2c8128166fec4f2ab37e`](https://www.okx.com/web3/explorer/xlayer-test/tx/0x1a758323c35d8208d44f16e4a54b15aef8a9fdaff47f2c8128166fec4f2ab37e) |
 | Deployment verification | Chain `1952`; quote signer `0xdAFEEdC46A7d39c2fF364ff63F438925A7514d43`; DemoAAPL and DemoNVDA getters match configured addresses; official USD₮0 getter matches `0x9e29b3aada05bf2d2c827af80bd28dc0b9b4fb0c` |
 
+### Phase 6 Builder Codes testnet evidence
+
+The current [official OKX integration guide](https://web3.okx.com/onchainos/dev-docs/xlayer/developer/builder-codes/integration) requires `viem` `2.45.0` or higher, `ox/erc8021`, and app-side `dataSuffix` attachment because OKX Wallet does not inject Builder Codes automatically. The frontend uses `viem` `^2.56.7`, `ox` `^0.14.45`, and attaches `Attribution.toDataSuffix({ codes: [VITE_PORTPAY_BUILDER_CODE] })` to the DemoAAPL approval and PortPay settlement write requests. No settlement-contract logic was changed.
+
+The official testnet registry proxy is `0x33907e98d7392d95212b05ab03f091e02d7815bf`. The supplied registration transaction [`0x364e2aecb5cbbe0b206cb254a82f786ce5dd0645668adc0af0ee391fb1ce8b50`](https://www.okx.com/web3/explorer/xlayer-test/tx/0x364e2aecb5cbbe0b206cb254a82f786ce5dd0645668adc0af0ee391fb1ce8b50) is canonical on chain `1952`. Its registry logs and a fresh `payoutAddress(uint256)` call prove that **`kob1lkgsg6infkg3` (`lk`)** is registered to `0xbabdfef588cf57efcc7c8857960e3ccdd9167589`. The older **`kob1klgsg6infkg3` (`kl`)** and temporary-page `2j3pbm1a4djso11j` both return the registry's `Unregistered` error and must not be used.
+
+A historical zero-value approval transaction [`0xac4bd28ab7ce813c6ccd92a39bd323db2f723e701bf42e3ffbdae0a9f11dda7f`](https://www.okx.com/web3/explorer/xlayer-test/tx/0xac4bd28ab7ce813c6ccd92a39bd323db2f723e701bf42e3ffbdae0a9f11dda7f) succeeded in block `41479224` and decoded to the older unregistered `kob1klgsg6infkg3`. It proves suffix mechanics only and is not the Phase 6 attribution proof.
+
+### Live Phase 6 attributed settlement proof
+
+Invoice `eb2eae24-f8c9-47b4-9a7f-20942fd83e6e` moved from `pending` to `paid` through the real buyer flow. The approval and settlement calldata both decode to `kob1lkgsg6infkg3`; the official registry resolves that code to the buyer payout `0xbabdfef588cf57efcc7c8857960e3ccdd9167589`.
+
+| Live item | Verified value |
+| --- | --- |
+| Chain | X Layer Testnet, `1952` |
+| Buyer / merchant | `0xbabdfef588cf57efcc7c8857960e3ccdd9167589` / `0x815c2fb8178f0bf80ada8c5b97ff44ece90e6e25` |
+| DemoAAPL / USD₮0 | `0x756546fce7d7ca3bb4be127904b002baf13b432e` / `0x9e29b3aada05bf2d2c827af80bd28dc0b9b4fb0c` |
+| PortPaySettlement | `0xeaab8d9507dcb3323c6045544d0bae546bfed90b` |
+| Builder Code | `kob1lkgsg6infkg3` in approval and settlement calldata |
+| Registry payout | `0xbabdfef588cf57efcc7c8857960e3ccdd9167589` from `payoutAddress(uint256)` |
+| Buyer approval | [`0xdd356fda64ff5dc4ee7550b178b782439a235288462709d32e3e89838f8ceab7`](https://www.okx.com/web3/explorer/xlayer-test/tx/0xdd356fda64ff5dc4ee7550b178b782439a235288462709d32e3e89838f8ceab7), block `41487785` |
+| Approval arguments | `approve(PortPaySettlement, 4000000000000000)` |
+| Settlement | [`0x4715d804cb838a05a8982e129d025e39e090955868868ff62465a53477cd3e07`](https://www.okx.com/web3/explorer/xlayer-test/tx/0x4715d804cb838a05a8982e129d025e39e090955868868ff62465a53477cd3e07), block `41487796` |
+| Settlement event | One matching `SettlementExecuted` event from the deployed PortPaySettlement |
+| Receipt verification | Successful receipt; receipt block hash matched the canonical block; `987` observed confirmations at verification time, `2` required |
+| Balance change | Buyer `0.996` → `0.992 DemoAAPL`; merchant `1` → `2 USD₮0` |
+| Invoice result | Supabase status `pending` → `paid`; exact `1 USD₮0` received |
+
 ## Environment configuration
 
 Copy the relevant example before running a workspace:
@@ -136,6 +164,8 @@ The examples contain no secrets. Keep populated `.env` files local and never com
 Frontend variables are prefixed with `VITE_` because Vite exposes them to browser code. Backend variables remain server-side. `VITE_BACKEND_URL`, `PUBLIC_APP_URL`, `SUPABASE_URL`, and `SUPABASE_SERVICE_ROLE_KEY` must be configured for a live invoice demo. `DATABASE_URL` is retained for Supabase/Postgres migration tooling. Do not expose the service-role key to the frontend.
 
 The Phase 3/5 backend also requires `QUOTE_SIGNER_PRIVATE_KEY`, `DEMO_AAPL_REFERENCE_PRICE_USD` (default `250.00` demo USD), `DEMO_NVDA_REFERENCE_PRICE_USD` (default `180.00` demo USD), and `QUOTE_TTL_SECONDS` (default `300`, allowed range `1`–`300`). The quote signer address must match `QUOTE_SIGNER_ADDRESS` used when deploying `PortPaySettlement`. The private key is server-only and must never be placed in the frontend environment.
+
+For Phase 6, set `VITE_PORTPAY_BUILDER_CODE` to a 16-character code registered on the official testnet registry with payout address `0xbabdfef588cf57efcc7c8857960e3ccdd9167589`. The current local value is the already registered `kob1lkgsg6infkg3`; checkout verifies it through an explicit X Layer Testnet public client and chain-1952 check before approval. Builder Codes are public identifiers, not secrets. Verify future transactions on [OKLink](https://www.oklink.com/x-layer-testnet) by checking the ERC-8021 calldata suffix, then read `payoutAddress(uint256)` from the official testnet registry.
 
 For contracts, copy `contracts/.env.example` to `contracts/.env` only when using the deployment or minting scripts. Keep `PRIVATE_KEY` populated only in that local untracked file. The frontend and backend examples contain the verified testnet USD₮0 address; `DemoAAPL` remains blank until a testnet deployment is made.
 
@@ -275,6 +305,10 @@ cd ../contracts; forge fmt --check; forge build --no-cache --use .tools/solc-0.8
 
 The frontend and backend can be started independently after their own install and Supabase configuration. A Phase 5 smoke check is: connect the buyer wallet, confirm DemoAAPL and DemoNVDA balances load, set target allocations, verify the deterministic recommendation and reason, choose Smart Pay or a manual asset, and confirm that no wallet transaction opens until the buyer clicks the explicit payment action. Confirm that a completed payment records Smart Spend usage and reason in both the receipt and Smart Payment History. Existing Phase 3 receipts and pending-invoice filtering must remain unchanged. Invalid/missing invoice links and incomplete transaction evidence should remain explicit rather than producing invented hashes or links.
 
+## Phase 6 verification
+
+The frontend Builder Code path is covered by `builderCodes.test.ts` tests for ERC-8021 encoding, registry/payout checks, fail-closed configuration, and viem approval/settlement calldata construction. The Foundry settlement test also verifies that trailing bytes do not change approval or settlement effects. Before a wallet prompt, checkout reads `payoutAddress(uint256)` from the official testnet registry and requires the expected payout address. The temporary registration route is not part of the product flow. The live Phase 6 proof above confirms both eligible transactions carried the registered code and the settlement receipt reconciled successfully.
+
 Before broadcasting, compare the deployed `quoteSigner`, `demoAsset`, `demoNvda`, and `stablecoin` getters against the backend signer, both demo asset addresses, and official testnet USD₮0 address. The deployment script requires the official USD₮0 address; the funding script checks that the target settlement contract reports the same stablecoin. The backend rejects a non-1952 RPC, filters receipt events to the configured settlement contract, binds the receipt sender to the buyer, and requires a canonical receipt block with two confirmations by default (`SETTLEMENT_CONFIRMATION_DEPTH`). Reconciliation uses the contract-verified asset amount in the event, so changing the demo reference price after signing cannot strand a successful payment. The contract checks the buyer's exact asset debit, its exact asset receipt, and the merchant's exact stablecoin receipt; fee-on-transfer tokens revert the entire settlement.
 
 ## Known limitations and deferred work
@@ -287,7 +321,7 @@ Before broadcasting, compare the deployed `quoteSigner`, `demoAsset`, `demoNvda`
 - Settlement liquidity must be funded manually with official testnet USD₮0 before a buyer can pay again.
 - The merchant wallet address is supplied by the connected frontend wallet but is not cryptographically authenticated by the Phase 2 API; authentication/authorization is deferred.
 - The Supabase migration enables row-level security and the backend uses the server-only service-role key. No browser client or direct anon-key database access is enabled.
-- Builder Code registration and transaction attribution are not implemented or verified.
+- The current Phase 6 implementation is testnet-only. Registration transaction `0x364e2aecb5cbbe0b206cb254a82f786ce5dd0645668adc0af0ee391fb1ce8b50` registered `kob1lkgsg6infkg3`, which is now the local frontend configuration. The temporary registration page is removed from the product route; registration remains an external setup step. The older `kob1klgsg6infkg3` and `2j3pbm1a4djso11j` values must not be used without independent registry proof.
 - The public X Layer Testnet RPC may be rate limited, and wallet connection/balance reads require an installed OKX Wallet browser extension and a connected account.
 - Receipt reconciliation requires a canonical receipt block and two confirmations by default; this is a small testnet safety check, not a claim of protocol finality. Receipt/history views are paid-only and currently load on wallet/view changes rather than through a realtime Supabase subscription.
 - The Phase 5 testnet setup is recorded below. A deployed demo asset and minted balance require a burner wallet, test OKB, and explicit local deployment commands when reproducing the proof.
@@ -296,4 +330,4 @@ Before broadcasting, compare the deployed `quoteSigner`, `demoAsset`, `demoNvda`
 
 ## Source-of-truth and phase discipline
 
-`AGENTS.md` defines repository workflow and approval gates. `PORTPAY_SPEC.md` defines the product, architecture, scope, and phased build plan. Only one named phase may be active at a time. Phase 3 implementation and the first live testnet proof are complete, Phase 4 receipts/history implementation is complete, Phase 5 Smart Spend implementation is complete pending approval, and GPT-5.6 Sol High Checkpoint A is complete. The next required review is after Builder Codes integration in Phase 6.
+`AGENTS.md` defines repository workflow and approval gates. `PORTPAY_SPEC.md` defines the product, architecture, scope, and phased build plan. Only one named phase may be active at a time. Phase 3 implementation and the first live testnet proof are complete, Phase 4 receipts/history implementation is complete, Phase 5 Smart Spend implementation is complete, and Phase 6 Builder Codes has a verified real attributed settlement and is ready for GPT-5.6 Sol High Checkpoint B review. Phase 7 has not started.

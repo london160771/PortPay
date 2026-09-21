@@ -145,6 +145,31 @@ contract PortPaySettlementTest is Test {
         assertTrue(settlement.settledInvoices(quote.invoiceId));
     }
 
+    function testTrailingAttributionBytesPreserveApprovalAndSettlement() public {
+        PortPaySettlement.SettlementQuote memory quote = _quote(
+            keccak256("invoice-attributed"), 80_000_000_000_000_000, 20_000_000, block.timestamp + 300
+        );
+        bytes memory signature = _sign(quote, SIGNER_PRIVATE_KEY);
+        // The frontend appends ERC-8021 bytes after each ABI-encoded call.
+        bytes memory trailingBytes = hex"802101020304";
+
+        vm.prank(buyer);
+        (bool approved,) = address(demoAapl).call(
+            bytes.concat(abi.encodeCall(DemoAAPL.approve, (address(settlement), quote.assetAmount)), trailingBytes)
+        );
+        assertTrue(approved);
+        assertEq(demoAapl.allowance(buyer, address(settlement)), quote.assetAmount);
+
+        vm.prank(buyer);
+        (bool paid,) = address(settlement).call(
+            bytes.concat(abi.encodeCall(PortPaySettlement.settle, (quote, signature)), trailingBytes)
+        );
+        assertTrue(paid);
+        assertTrue(settlement.settledInvoices(quote.invoiceId));
+        assertEq(demoAapl.balanceOf(address(settlement)), quote.assetAmount);
+        assertEq(usdt0.balanceOf(merchant), quote.stablecoinAmount);
+    }
+
     function testSettlesConfiguredDemoNvdaAsset() public {
         PortPaySettlement.SettlementQuote memory quote = _quote(
             keccak256("invoice-nvda"), 80_000_000_000_000_000, 20_000_000, block.timestamp + 300

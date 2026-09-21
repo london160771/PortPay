@@ -243,6 +243,7 @@ The current implementation boundary is a server-signed EIP-712 quote plus canoni
 
 - Integrate and verify OKX/X Layer Builder Codes.
 - Document configuration/evidence.
+- The current testnet implementation uses `ox/erc8021` and `dataSuffix` on eligible DemoAAPL approval and PortPay settlement requests. Independent review of registration transaction `0x364e2aecb5cbbe0b206cb254a82f786ce5dd0645668adc0af0ee391fb1ce8b50` found that it registered `kob1lkgsg6infkg3` (the letters `lk`), which is the current local configuration. Checkout verifies this code through an explicit X Layer Testnet public client and chain-1952 check before a buyer-wallet transaction. A real approval and settlement for invoice `eb2eae24-f8c9-47b4-9a7f-20942fd83e6e` were independently decoded and verified with this code, including the canonical settlement receipt and registry payout. Do not use the older unregistered `kob1klgsg6infkg3` or temporary-page value `2j3pbm1a4djso11j`. Phase 6 is ready for GPT-5.6 Sol High Checkpoint B review; approval remains gated on that review.
 - Stop for GPT-5.6 Sol High review reminder.
 
 ### Phase 7 — Polish/submission

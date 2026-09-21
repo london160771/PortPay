@@ -3,13 +3,14 @@ import type { Invoice } from './api';
 import { portfolioAssets } from './assets';
 import { portPayNetworkConfig, VERIFIED_TESTNET_USDT0_ADDRESS } from './network';
 
-function displayDecimal(value: string): string {
-  if (!value.includes('.')) return value;
-  return value.replace(/0+$/, '').replace(/\.$/, '');
+function displayDecimal(value: string | number): string {
+  const normalized = String(value);
+  if (!normalized.includes('.')) return normalized;
+  return normalized.replace(/0+$/, '').replace(/\.$/, '');
 }
 
 export function formatSpentAmount(invoice: Invoice): string {
-  if (!invoice.spentAmount || !/^\d+$/.test(invoice.spentAmount)) return 'Amount unavailable';
+  if (typeof invoice.spentAmount !== 'string' || !/^\d+$/.test(invoice.spentAmount)) return 'Amount unavailable';
 
   const knownAsset = Object.values(portfolioAssets).find((asset) =>
     invoice.spentAsset && isAddress(invoice.spentAsset) && asset.address
@@ -27,8 +28,9 @@ export function formatSpentAmount(invoice: Invoice): string {
 
 export function formatReceivedAmount(invoice: Invoice): string {
   const amount = invoice.stablecoinReceived ?? invoice.amountUsdt0;
-  if (!/^\d+(?:\.\d+)?$/.test(amount)) return 'Amount unavailable';
-  return `${displayDecimal(amount)} USD₮0`;
+  const normalizedAmount = typeof amount === 'number' ? String(amount) : amount;
+  if (!/^\d+(?:\.\d+)?$/.test(normalizedAmount)) return 'Amount unavailable';
+  return `${displayDecimal(normalizedAmount)} USD₮0`;
 }
 
 export function formatPaymentTimestamp(value: string | undefined): string {

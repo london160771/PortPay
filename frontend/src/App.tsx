@@ -43,6 +43,14 @@ import {
 import { portPaySettlementAbi, type SettlementWriteQuote } from './config/settlement';
 import { getWalletNetworkState, shortenAddress } from './config/wallet';
 import { okxWalletConnector } from './config/wagmi';
+import {
+  assertRegisteredBuilderCode,
+  BuilderCodeVerificationError,
+  builderCodeTransactionData,
+  portPayBuilderCode,
+  readBuilderCodePayoutAddress,
+} from './config/builderCodes';
+
 
 type TokenBalanceCardProps = {
   asset: (typeof testnetAssets)[keyof typeof testnetAssets];
@@ -636,6 +644,9 @@ function displayAmount(value: string): string {
 }
 
 function paymentErrorMessage(error: unknown): string {
+  if (import.meta.env.DEV && error instanceof BuilderCodeVerificationError) {
+    return `${error.message} Diagnostics: ${JSON.stringify(error.diagnostics)}`;
+  }
   const message = error instanceof Error ? error.message : String(error);
   if (/reject|denied|user rejected|cancel/i.test(message)) return 'The wallet signature was rejected. No payment was completed.';
   if (/insufficient|balance/i.test(message)) return 'This wallet does not have enough selected demo asset or test OKB for the requested payment.';
@@ -864,6 +875,11 @@ function BuyerWalletPanel({
 
     setPaymentError('');
     try {
+      const verifyBuilderCode = () => assertRegisteredBuilderCode(
+        portPayBuilderCode,
+        () => readBuilderCodePayoutAddress(portPayBuilderCode),
+      );
+      await verifyBuilderCode();
       const allowance = await publicClient.readContract({
         address: assetAddress,
         abi: erc20BalanceAbi,
@@ -872,14 +888,14 @@ function BuyerWalletPanel({
       });
       if (needsApproval(allowance, requiredAssetAmount)) {
         setPaymentStep('awaiting-approval');
-        const approvalHash = await writeContractAsync({
+        const approvalHash = await writeContractAsync(builderCodeTransactionData({
           account: address,
           address: assetAddress,
           abi: erc20BalanceAbi,
           functionName: 'approve',
           args: [settlementAddress, requiredAssetAmount],
           chainId: xLayerTestnet.id,
-        });
+        }));
         setPaymentStep('confirming-approval');
         const approvalReceipt = await publicClient.waitForTransactionReceipt({ hash: approvalHash });
         if (approvalReceipt.status !== 'success') throw new Error(`The ${portfolioAssets[selectedAssetKey].label} approval transaction failed.`);
@@ -889,6 +905,7 @@ function BuyerWalletPanel({
         setPaymentError('The quote is no longer valid after approval. Refresh it before paying.');
         return;
       }
+      await verifyBuilderCode();
 
       setPaymentStep('awaiting-payment-signature');
       const writeQuote: SettlementWriteQuote = {
@@ -903,14 +920,14 @@ function BuyerWalletPanel({
         settlementContract: quote.quote.settlementContract,
         expiry: BigInt(quote.quote.expiry),
       };
-      const settlementHash = await writeContractAsync({
+      const settlementHash = await writeContractAsync(builderCodeTransactionData({
         account: address,
         address: settlementAddress,
         abi: portPaySettlementAbi,
         functionName: 'settle',
         args: [writeQuote, quote.signature],
         chainId: xLayerTestnet.id,
-      });
+      }));
       setConfirmedPaymentHash(settlementHash);
       setPaymentStep('confirming-payment');
       const settlementReceipt = await publicClient.waitForTransactionReceipt({ hash: settlementHash });
@@ -1352,6 +1369,45 @@ function AppShell({ children }: { children: React.ReactNode }) {
   );
 }
 
+function BuilderCodeDebugPage() {
+  const [result, setResult] = useState<{ status: 'checking' | 'verified' | 'failed'; message: string; details?: string }>({
+    status: 'checking',
+    message: 'Running the browser registry verification…',
+  });
+
+  useEffect(() => {
+    assertRegisteredBuilderCode(
+      portPayBuilderCode,
+      () => readBuilderCodePayoutAddress(portPayBuilderCode),
+    ).then(
+      () => setResult({ status: 'verified', message: 'Builder Code verification passed.' }),
+      (error: unknown) => setResult({
+        status: 'failed',
+        message: error instanceof Error ? error.message : String(error),
+        details: error instanceof BuilderCodeVerificationError
+          ? JSON.stringify(error.diagnostics, null, 2)
+          : undefined,
+      }),
+    );
+  }, []);
+
+  return (
+    <section className="flex flex-1 items-center justify-center py-16">
+      <div className="w-full max-w-2xl rounded-[2rem] border border-ink/10 bg-white p-7 shadow-soft sm:p-10">
+        <p className="text-xs font-bold uppercase tracking-[0.2em] text-ink/45">Development diagnostics</p>
+        <h1 className="mt-3 text-3xl font-semibold text-ink">Builder Code registry check</h1>
+        <p className="mt-3 text-sm leading-6 text-ink/60">This temporary page runs the same fail-closed check used immediately before buyer approval.</p>
+        <div className="mt-7 rounded-2xl bg-ink/5 p-5 text-sm leading-7 text-ink">
+          <p><strong>Code:</strong> {portPayBuilderCode}</p>
+          <p><strong>Status:</strong> {result.status}</p>
+          <p className="mt-2">{result.message}</p>
+          {result.details ? <pre className="mt-4 overflow-auto whitespace-pre-wrap rounded-xl bg-white p-4 text-xs leading-5">{result.details}</pre> : null}
+        </div>
+      </div>
+    </section>
+  );
+}
+
 export default function App() {
   const [route, setRoute] = useState<InvoiceRoute>(() => readInvoiceRoute(window.location.pathname));
 
@@ -1373,7 +1429,9 @@ export default function App() {
 
   return (
     <AppShell>
-      {route.type === 'invoice' ? (
+      {import.meta.env.DEV && window.location.pathname === '/__builder-code-debug' ? (
+        <BuilderCodeDebugPage />
+      ) : route.type === 'invoice' ? (
         <InvoiceDetailPage invoiceId={route.invoiceId} onBack={openDashboard} />
       ) : (
         <MerchantDashboard onOpenInvoice={openInvoice} />
