@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { invoiceStatusLabel, paymentSuccessLabel, readInvoiceRoute, showBuyerSelectionDetails } from './invoice';
+import { invoiceStatusLabel, paymentStatusLabel, paymentSuccessLabel, readInvoiceRoute, showBuyerSelectionDetails } from './invoice';
 import { resolveBackendUrl } from './api';
 
 describe('invoice link routing', () => {
@@ -18,6 +18,9 @@ describe('invoice link routing', () => {
     expect(invoiceStatusLabel('paid')).toBe('Payment received');
     expect(paymentSuccessLabel('buyer')).toBe('Payment sent');
     expect(paymentSuccessLabel('merchant')).toBe('Payment received');
+    expect(paymentStatusLabel('buyer', 'paid')).toBe('Payment confirmed');
+    expect(paymentStatusLabel('buyer', 'paid')).not.toBe('Payment received');
+    expect(paymentStatusLabel('merchant', 'paid')).toBe('Payment received');
     expect(showBuyerSelectionDetails('buyer')).toBe(true);
     expect(showBuyerSelectionDetails('merchant')).toBe(false);
   });

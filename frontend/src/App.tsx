@@ -23,7 +23,7 @@ import {
 } from './config/api';
 import { erc20BalanceAbi, formatTokenBalance, parseConfiguredAddress, portfolioAssets, testnetAssets } from './config/assets';
 import { portPayNetworkConfig, xLayerTestnet } from './config/network';
-import { invoiceStatusLabel, paymentSuccessLabel, readInvoiceRoute, showBuyerSelectionDetails, type InvoiceRoute } from './config/invoice';
+import { invoiceStatusLabel, paymentStatusLabel, paymentSuccessLabel, readInvoiceRoute, showBuyerSelectionDetails, type InvoiceRoute } from './config/invoice';
 import {
   formatPaymentTimestamp,
   formatReceivedAmount,
@@ -1284,7 +1284,7 @@ function BuyerCheckoutPage({ invoiceId, onBack, onOpenBuyerInvoice }: { invoiceI
                 <span className={`grid h-8 w-8 place-items-center rounded-full text-sm font-bold ${invoice.status === 'paid' ? 'bg-emerald-600 text-white' : 'bg-amber-200 text-amber-950'}`}>
                   {invoice.status === 'paid' ? '✓' : '…'}
                 </span>
-                <p className="text-sm font-semibold">{invoiceStatusLabel(invoice.status)}</p>
+                <p className="text-sm font-semibold">{paymentStatusLabel('buyer', invoice.status)}</p>
               </div>
               <p className="mt-2 text-sm leading-6 text-ink/55">
                 {invoice.status === 'paid'
@@ -1471,7 +1471,7 @@ function PaymentReceipt({ invoice, role }: { invoice: Invoice; role: 'buyer' | '
         </div>
         <div>
           <dt className="text-emerald-900/55">Status</dt>
-          <dd className="mt-1 font-semibold text-emerald-950">{invoiceStatusLabel(invoice.status)}</dd>
+          <dd className="mt-1 font-semibold text-emerald-950">{paymentStatusLabel(role, invoice.status)}</dd>
         </div>
         <div>
           <dt className="text-emerald-900/55">{isBuyer ? 'Merchant' : 'Buyer'}</dt>

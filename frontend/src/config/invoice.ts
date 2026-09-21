@@ -47,6 +47,11 @@ export function paymentSuccessLabel(role: 'buyer' | 'merchant'): string {
   return role === 'buyer' ? 'Payment sent' : 'Payment received';
 }
 
+export function paymentStatusLabel(role: 'buyer' | 'merchant', status: InvoiceStatus): string {
+  if (status === 'pending') return 'Waiting for payment';
+  return role === 'buyer' ? 'Payment confirmed' : 'Payment received';
+}
+
 export function showBuyerSelectionDetails(view: 'buyer' | 'merchant'): boolean {
   return view === 'buyer';
 }
