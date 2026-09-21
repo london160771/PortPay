@@ -87,6 +87,7 @@ export type InvoiceRow = {
   title: string;
   amount_usdt0: string | number;
   merchant_address: string;
+  external_order_reference: string | null;
   payment_url: string;
   status: Invoice['status'];
   created_at: string;
@@ -110,6 +111,7 @@ const INVOICE_SELECT = `
   title,
   amount_usdt0::text,
   merchant_address,
+  external_order_reference,
   payment_url,
   status,
   created_at,
@@ -139,6 +141,7 @@ export class SupabaseInvoiceRepository implements InvoiceRepository {
         title: invoice.title,
         amount_usdt0: invoice.amountUsdt0,
         merchant_address: invoice.merchantAddress,
+        external_order_reference: invoice.externalOrderReference ?? null,
         payment_url: invoice.paymentUrl,
         status: invoice.status,
         created_at: invoice.createdAt,
@@ -237,6 +240,7 @@ export function mapInvoiceRow(row: InvoiceRow): Invoice {
     title: row.title,
     amountUsdt0,
     merchantAddress: row.merchant_address,
+    ...(row.external_order_reference ? { externalOrderReference: row.external_order_reference } : {}),
     paymentUrl: row.payment_url,
     status: row.status,
     createdAt: row.created_at,

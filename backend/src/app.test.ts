@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { createApp } from './app.js';
 import { InMemoryInvoiceRepository } from './invoices/repository.js';
 
-describe('backend Phase 4 routes', () => {
+describe('backend routes', () => {
   it('exposes receipt/history routes alongside the existing invoice and settlement routes', () => {
     const app = createApp(new InMemoryInvoiceRepository());
     const expressApp = app as unknown as {
@@ -18,5 +18,7 @@ describe('backend Phase 4 routes', () => {
     expect(paths).toContain('/api/invoices/:invoiceId/reconcile');
     expect(paths).toContain('/api/history/merchant');
     expect(paths).toContain('/api/history/buyer');
+    expect(paths).toContain('/api/integration/invoices');
+    expect(paths).toContain('/api/integration/invoices/:invoiceId/status');
   });
 });

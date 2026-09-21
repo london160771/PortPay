@@ -387,6 +387,10 @@ Current implementation note (2026-09-21): the product surfaces now present a thr
 
 **Mandatory GPT-5.6 Sol High review checkpoint:** before final submission and before any mainnet test. Review the complete implementation, contracts, Builder Codes, documentation, security assumptions, demo claims, and known limitations.
 
+### Pre-mainnet merchant integration readiness pass
+
+Before any optional mainnet work, PortPay may complete a focused readiness pass without starting `OKXDEXMainnetAdapter`. This pass may add role-separated merchant and buyer routes, nested product documentation, and a minimal server-to-server merchant integration above the invoice/payment layer. Merchant API authentication, external order references, and signed payment notifications must remain server-side, fail closed, and reuse the existing verified invoice/reconciliation path. No new settlement logic, mainnet configuration, network selector, live transaction, or contract change is part of this pass.
+
 ### Optional Phase 8 — Tiny mainnet proof
 
 Only after the Phase 7 Sol High review and separate explicit user approval. Implement/use `OKXDEXMainnetAdapter` for one deliberately tiny real xStock-to-stablecoin proof if the route, funds, and safety conditions are available. This phase is optional and must not delay or weaken the testnet submission.

@@ -1,7 +1,12 @@
 import cors from 'cors';
 import express from 'express';
 import { databaseConfig, isDatabaseConfigured } from './config/database.js';
-import { runtimeConfig } from './config/runtime.js';
+import {
+  findMerchantApiCredential,
+  findMerchantCredentialByAddress,
+  runtimeConfig,
+} from './config/runtime.js';
+import type { MerchantAuthConfig, MerchantCredential } from './config/runtime.js';
 import { xLayerTestnet } from './config/xlayer.js';
 import { createInvoice } from './invoices/service.js';
 import { reconcileInvoicePayment } from './invoices/settlement.js';
@@ -10,7 +15,7 @@ import {
   DatabaseNotConfiguredError,
   InvoicePersistenceError,
 } from './invoices/repository.js';
-import type { InvoiceRepository } from './invoices/types.js';
+import type { Invoice, InvoiceRepository } from './invoices/types.js';
 import {
   InvoiceValidationError,
   validateInvoiceId,
@@ -26,12 +31,48 @@ import {
   SettlementNotConfiguredError,
 } from './settlement/types.js';
 import type { SettlementAdapter } from './settlement/types.js';
+import { deliverPaymentConfirmedWebhook } from './integration/webhook.js';
+
+type AppOptions = {
+  merchantAuth?: MerchantAuthConfig;
+  webhookDelivery?: (invoice: Invoice, credential: MerchantCredential) => Promise<void>;
+};
+
+type AuthenticatedRequest = express.Request & { merchantCredential?: MerchantCredential };
+
+function merchantAuthMiddleware(config: MerchantAuthConfig): express.RequestHandler {
+  return (request, response, next) => {
+    const credential = findMerchantApiCredential(request.header('authorization'), config);
+    if (!credential) {
+      response.status(401).json({
+        error: 'Merchant API authentication required.',
+        code: 'merchant_auth_required',
+      });
+      return;
+    }
+
+    (request as AuthenticatedRequest).merchantCredential = credential;
+    next();
+  };
+}
+
+function integrationInvoice(invoice: Invoice) {
+  return invoice;
+}
+
+function publicInvoice(invoice: Invoice): Omit<Invoice, 'externalOrderReference'> {
+  const publicFields = { ...invoice };
+  delete publicFields.externalOrderReference;
+  return publicFields;
+}
 
 export function createApp(
   invoiceRepository: InvoiceRepository = createInvoiceRepository(),
   settlementAdapter: SettlementAdapter = createTestnetSettlementAdapter(),
+  options: AppOptions = {},
 ) {
   const app = express();
+  const merchantAuth = options.merchantAuth ?? runtimeConfig.merchantAuth;
 
   app.use(
     cors({
@@ -44,7 +85,7 @@ export function createApp(
     response.json({
       service: 'PortPay backend',
       status: 'ok',
-      phase: 'Phase 4 — Receipts + Smart Payment History',
+      phase: 'Phase 7 — Polish/submission',
       network: {
         name: xLayerTestnet.name,
         chainId: xLayerTestnet.chainId,
@@ -58,8 +99,13 @@ export function createApp(
 
   app.post('/api/invoices', async (request, response, next) => {
     try {
-      const invoice = await createInvoice(invoiceRepository, runtimeConfig.publicAppUrl, request.body);
-      response.status(201).json({ invoice });
+      const body = request.body && typeof request.body === 'object' ? request.body : {};
+      const invoice = await createInvoice(invoiceRepository, runtimeConfig.publicAppUrl, {
+        title: body.title,
+        amountUsdt0: body.amountUsdt0,
+        merchantAddress: body.merchantAddress,
+      });
+      response.status(201).json({ invoice: publicInvoice(invoice) });
     } catch (error) {
       next(error);
     }
@@ -69,7 +115,7 @@ export function createApp(
     try {
       const merchantAddress = validateMerchantAddress(request.query.merchantAddress);
       const invoices = await invoiceRepository.listByMerchant(merchantAddress);
-      response.json({ invoices });
+      response.json({ invoices: invoices.map(publicInvoice) });
     } catch (error) {
       next(error);
     }
@@ -79,7 +125,7 @@ export function createApp(
     try {
       const merchantAddress = validateMerchantAddress(request.query.merchantAddress);
       const payments = await invoiceRepository.listPaidByMerchant(merchantAddress);
-      response.json({ payments });
+      response.json({ payments: payments.map(publicInvoice) });
     } catch (error) {
       next(error);
     }
@@ -89,7 +135,7 @@ export function createApp(
     try {
       const buyerAddress = validateWalletAddress(request.query.buyerAddress, 'Buyer wallet');
       const payments = await invoiceRepository.listPaidByBuyer(buyerAddress);
-      response.json({ payments });
+      response.json({ payments: payments.map(publicInvoice) });
     } catch (error) {
       next(error);
     }
@@ -104,7 +150,7 @@ export function createApp(
         return;
       }
 
-      response.json({ invoice });
+      response.json({ invoice: publicInvoice(invoice) });
     } catch (error) {
       next(error);
     }
@@ -149,7 +195,58 @@ export function createApp(
           ...validateSmartSpendMetadata(request.body),
         },
       );
-      response.json({ invoice: updatedInvoice });
+      const credential = findMerchantCredentialByAddress(updatedInvoice.merchantAddress, merchantAuth);
+      if (credential?.webhookUrl && credential.webhookSecret) {
+        const deliver = options.webhookDelivery ?? ((paidInvoice, paidCredential) =>
+          deliverPaymentConfirmedWebhook(paidCredential, paidInvoice));
+        void deliver(updatedInvoice, credential).catch((error: unknown) => {
+          console.error('PortPay payment webhook delivery failed', error);
+        });
+      }
+      response.json({ invoice: publicInvoice(updatedInvoice) });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.use('/api/integration', merchantAuthMiddleware(merchantAuth));
+
+  app.post('/api/integration/invoices', async (request, response, next) => {
+    try {
+      const credential = (request as AuthenticatedRequest).merchantCredential;
+      if (!credential) {
+        response.status(401).json({ error: 'Merchant API authentication required.', code: 'merchant_auth_required' });
+        return;
+      }
+      const body = request.body && typeof request.body === 'object' ? request.body : {};
+      const invoice = await createInvoice(invoiceRepository, runtimeConfig.publicAppUrl, {
+        ...body,
+        merchantAddress: credential.merchantAddress,
+      });
+      response.status(201).json({ invoice: integrationInvoice(invoice) });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.get('/api/integration/invoices/:invoiceId/status', async (request, response, next) => {
+    try {
+      const credential = (request as AuthenticatedRequest).merchantCredential;
+      const invoiceId = validateInvoiceId(request.params.invoiceId);
+      const invoice = await invoiceRepository.findById(invoiceId);
+      if (!invoice || !credential || invoice.merchantAddress !== credential.merchantAddress) {
+        response.status(404).json({ error: 'Invoice not found.' });
+        return;
+      }
+      response.json({
+        invoiceId: invoice.id,
+        status: invoice.status,
+        amountUsdt0: invoice.amountUsdt0,
+        paymentUrl: invoice.paymentUrl,
+        ...(invoice.externalOrderReference ? { externalOrderReference: invoice.externalOrderReference } : {}),
+        ...(invoice.paymentTxHash ? { paymentTxHash: invoice.paymentTxHash } : {}),
+        ...(invoice.paidAt ? { paidAt: invoice.paidAt } : {}),
+      });
     } catch (error) {
       next(error);
     }

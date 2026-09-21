@@ -253,6 +253,7 @@ The current implementation boundary is a server-signed EIP-712 quote plus canoni
 - Update README, `PORTPAY_SPEC.md`, and `AGENTS.md` for all material changes.
 - Prepare the two-tab judge demo and final evidence.
 - Current implementation note (2026-09-21): the merchant and buyer surfaces use a three-step handoff, touch-friendly actions, explicit loading/empty/success/failure states, and isolated development-only Builder Code diagnostics. The presentation pass does not change settlement, quote, Smart Spend, history, or Builder Code logic.
+- A separate pre-mainnet readiness pass may add role-separated merchant/buyer routes, nested product documentation, and a minimal authenticated server-to-server merchant integration above the invoice/payment layer. It must not start `OKXDEXMainnetAdapter`, add mainnet configuration, change settlement/security logic, send transactions, or bypass the existing verified reconciliation path.
 - Stop for GPT-5.6 Sol High review before final submission or any mainnet test.
 
 ### Optional Phase 8 — tiny mainnet proof

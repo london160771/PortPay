@@ -16,6 +16,7 @@ export type CreateInvoiceInput = {
   title: string;
   amountUsdt0: string;
   merchantAddress: string;
+  externalOrderReference?: string;
 };
 
 export type SmartSpendMetadataInput = {
@@ -97,9 +98,21 @@ export function validateCreateInvoiceInput(input: unknown): CreateInvoiceInput {
     throw new InvoiceValidationError('Amount must be greater than zero and fit the USD₮0 precision.');
   }
 
+  const externalOrderReferenceValue = body.externalOrderReference;
+  const externalOrderReference = externalOrderReferenceValue === undefined || externalOrderReferenceValue === null
+    ? undefined
+    : typeof externalOrderReferenceValue === 'string'
+      ? externalOrderReferenceValue.trim()
+      : '';
+  if (externalOrderReferenceValue !== undefined && externalOrderReferenceValue !== null
+    && (!externalOrderReference || externalOrderReference.length > 160)) {
+    throw new InvoiceValidationError('External order reference must be between 1 and 160 characters.');
+  }
+
   return {
     title,
     amountUsdt0: normalizedAmount,
     merchantAddress: validateMerchantAddress(body.merchantAddress),
+    ...(externalOrderReference ? { externalOrderReference } : {}),
   };
 }

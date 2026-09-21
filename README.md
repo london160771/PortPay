@@ -2,19 +2,21 @@
 
 Spend your portfolio. Merchants get stablecoins.
 
-PortPay is a payment-layer foundation for paying with tokenized portfolio assets while a merchant receives stablecoins on X Layer. The project starts on X Layer Testnet and keeps the testnet settlement path separate from the optional future `OKXDEXMainnetAdapter` path.
+PortPay lets customers spend tokenized stock holdings while merchants receive stablecoins. Businesses request payment in stablecoins, customers choose an xStock-style portfolio asset, PortPay handles the payment flow, and both sides receive an onchain-verifiable receipt.
+
+The core message is simple: **PortPay turns tokenized portfolios into a payment method. Customers spend the assets they already hold. Merchants keep pricing and receiving payments in stablecoins.**
 
 ## Current project status
 
-**Phase 7 — Product polish and final submission readiness: the merchant/buyer demo, receipt, Smart Spend, and Smart Payment History surfaces are complete. GPT-5.6 Sol High Checkpoint C was performed on 2026-09-21; review fixes are uncommitted and a final human two-tab wallet check remains before submission. No mainnet test is approved or required.**
+**Pre-mainnet product readiness pass: role-separated merchant/buyer views, nested documentation, authenticated merchant integration, and the existing testnet payment proof are in place. No mainnet test is approved or required.**
 
 The repository now contains independent frontend, backend, and Foundry contract workspaces, an OKX Wallet-aware merchant dashboard, Supabase/Postgres-backed invoice persistence, unique shareable invoice links, a buyer checkout for DemoAAPL and DemoNVDA, signed short-lived multi-asset settlement quotes, the two-asset `PortPaySettlement` contract, verified-event invoice reconciliation, transaction-backed payment receipts, paid-only Smart Payment History for buyer and merchant views, and deterministic Smart Spend recommendations. No mainnet functionality is required or configured.
 
-Frontend, backend, and Foundry verification pass locally. Foundry was run from the repository's bundled Windows release in the ignored `contracts/.tools/foundry` directory, so WSL is not required.
+Frontend and backend verification pass locally. The pinned Windows Foundry release remains in the ignored `contracts/.tools/foundry` directory, so WSL is not required by the project; this UX/integration pass made no contract changes and did not send transactions.
 
 PortPay now prepares ERC-8021 Builder Code suffixes for eligible browser-wallet approval and settlement transactions and checks registry registration and payout before requesting a wallet signature. The configured code is registered and was verified on a real attributed testnet payment. `OKXDEXMainnetAdapter` remains deferred. The Phase 3 proof used Supabase/Postgres, a dedicated quote signer, funded testnet contracts, test OKB, and separate buyer/merchant wallets. Phase 5 added and deployed DemoNVDA plus the two-asset settlement contract; the Phase 6 live proof used DemoAAPL.
 
-Phase 7 adds a judge-friendly product surface around that working flow: the merchant home screen explains the three-step handoff, invoice creation and sharing are visually prioritized, buyer checkout leads with the amount due and exact quote, Smart Spend is clearly optional and deterministic, and confirmed receipts lead with the amount received and explorer evidence. Testnet and demo-asset disclosures remain visible throughout. No settlement, contract, Builder Code, or mainnet behavior changed.
+The pre-mainnet readiness pass keeps that working flow compact and judge-friendly: merchant and buyer routes are visibly separate, each role receives role-specific receipt wording, buyer checkout leads with the amount due and exact quote, Smart Spend remains buyer-only and deterministic, and merchant integration sits above the existing invoice/reconciliation layer. Testnet and demo-asset disclosures remain visible throughout. No settlement, contract, Builder Code, or mainnet behavior changed.
 
 ## Stack
 
@@ -54,6 +56,7 @@ Express API (backend/)
   ├── health/readiness foundation
   ├── X Layer Testnet and address configuration
   ├── merchant invoice API and validation
+  ├── authenticated merchant integration API and signed payment notifications
   ├── Supabase/Postgres invoice repository
   ├── `TestnetSettlementAdapter` quote signing
   ├── deterministic Smart Spend allocation and target rules
@@ -67,6 +70,15 @@ Foundry workspace (contracts/)
 ```
 
 Invoice metadata, product names, payment-link records, and indexed settlement evidence are persisted offchain in Supabase/Postgres. Ownership, settlement, payment, and the compact `SettlementExecuted` receipt event are onchain. The testnet flow is portfolio settlement / testnet simulated RWA conversion through `TestnetSettlementAdapter`; it is not an OKX DEX swap.
+
+The product routes are intentionally role-separated:
+
+- `/merchant` — merchant dashboard and invoice list.
+- `/merchant/invoices/:invoiceId` — merchant status, copyable buyer link, and merchant receipt.
+- `/pay/:invoiceId` — hosted buyer checkout, wallet actions, Smart Spend, and buyer receipt.
+- `/docs`, `/docs/getting-started`, `/docs/how-it-works`, `/docs/merchant-integration`, `/docs/testnet` — judge and business documentation.
+
+The merchant API is also role-separated from the browser: server-side merchant credentials create invoices and retrieve verified status, while the hosted `/pay/:invoiceId` page owns wallet/payment behavior.
 
 The adapter boundary is documented for the later phases:
 
@@ -163,7 +175,8 @@ Copy-Item backend/.env.example backend/.env
 
 The examples contain no secrets. Keep populated `.env` files local and never commit private keys, seed phrases, Supabase secrets, API credentials, or mainnet credentials.
 
-Frontend variables are prefixed with `VITE_` because Vite exposes them to browser code. Backend variables remain server-side. `VITE_BACKEND_URL`, `PUBLIC_APP_URL`, `SUPABASE_URL`, and `SUPABASE_SERVICE_ROLE_KEY` must be configured for a live invoice demo. `DATABASE_URL` is retained for Supabase/Postgres migration tooling. Do not expose the service-role key to the frontend.
+Frontend variables are prefixed with `VITE_` because Vite exposes them to browser code. Backend variables remain server-side. `VITE_BACKEND_URL`, `PUBLIC_APP_URL`, `SUPABASE_URL`, and `SUPABASE_SERVICE_ROLE_KEY` must be configured for a live invoice demo. `DATABASE_URL` is retained for Supabase/Postgres migration tooling. Do not expose the service-role key or `PORTPAY_*_API_KEY` values to the frontend.
+External merchant integrations use the server-only `PORTPAY_TEST_API_KEY` and `PORTPAY_TEST_MERCHANT_ADDRESS` pair. Generate an API key with at least 32 high-entropy characters. Optional signed callbacks use a trusted operator-configured HTTPS `PORTPAY_TEST_WEBHOOK_URL`; literal local/private destinations are rejected. `PORTPAY_TEST_WEBHOOK_SECRET` must contain at least 32 high-entropy characters. No mainnet merchant credentials or chain configuration are introduced by this pass.
 Production frontend deployments must set `VITE_BACKEND_URL` at build time; API requests fail clearly when it is omitted. Production backend startup requires explicit `PUBLIC_APP_URL` and `CORS_ORIGIN`. Localhost defaults apply only to development, so check all three public origins when deploying the two-tab demo.
 
 The Phase 3/5 backend also requires `QUOTE_SIGNER_PRIVATE_KEY`, `DEMO_AAPL_REFERENCE_PRICE_USD` (default `250.00` demo USD), `DEMO_NVDA_REFERENCE_PRICE_USD` (default `180.00` demo USD), and `QUOTE_TTL_SECONDS` (default `300`, allowed range `1`–`300`). The quote signer address must match `QUOTE_SIGNER_ADDRESS` used when deploying `PortPaySettlement`. The private key is server-only and must never be placed in the frontend environment.
@@ -179,10 +192,11 @@ Create or select a Supabase project, then apply these migrations in order throug
 1. [`backend/supabase/migrations/20260917000000_create_invoices.sql`](backend/supabase/migrations/20260917000000_create_invoices.sql)
 2. [`backend/supabase/migrations/20260917000001_add_settlement_evidence.sql`](backend/supabase/migrations/20260917000001_add_settlement_evidence.sql)
 3. [`backend/supabase/migrations/20260920000000_add_smart_spend_metadata.sql`](backend/supabase/migrations/20260920000000_add_smart_spend_metadata.sql)
+4. [`backend/supabase/migrations/20260921000001_add_merchant_integration.sql`](backend/supabase/migrations/20260921000001_add_merchant_integration.sql)
 
-The first migration creates `public.invoices`; the second adds confirmed settlement evidence fields and unique transaction/quote indexes; the third adds `smart_spend_used`, `smart_spend_recommended_asset`, and `smart_spend_reason` for paid history. All keep row-level security enabled. PortPay uses the server-only `SUPABASE_SERVICE_ROLE_KEY`; no browser Supabase client is used. Apply all three before relying on persisted Smart Spend metadata.
+The first migration creates `public.invoices`; the second adds confirmed settlement evidence fields and unique transaction/quote indexes; the third adds `smart_spend_used`, `smart_spend_recommended_asset`, and `smart_spend_reason` for paid history; the fourth adds the optional merchant-controlled `external_order_reference` and lookup index. All keep row-level security enabled. PortPay uses the server-only `SUPABASE_SERVICE_ROLE_KEY`; no browser Supabase client is used. Apply all four before relying on the complete current integration schema.
 
-Configure `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `PUBLIC_APP_URL`, and `CORS_ORIGIN` in `backend/.env`. Keep `PUBLIC_APP_URL` equal to the independently deployed frontend origin so generated `/invoice/<uuid>` links open in the right app.
+Configure `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `PUBLIC_APP_URL`, and `CORS_ORIGIN` in `backend/.env`. Keep `PUBLIC_APP_URL` equal to the independently deployed frontend origin so generated `/pay/<uuid>` links open in the right app.
 
 ## Local run instructions
 
@@ -195,7 +209,7 @@ Copy-Item .env.example .env
 npm run dev
 ```
 
-Open `http://localhost:5173`. For a production-style local check:
+Open `http://localhost:5173/merchant`. For a production-style local check:
 
 ```powershell
 npm run lint
@@ -207,9 +221,11 @@ npm run start
 
 `npm run start` serves the Vite preview and expects the preceding build output.
 
+The frontend scripts use Vite's runner config loader for reliable Windows/OneDrive development and test execution. This does not change the production bundle or wallet behavior.
+
 With OKX Wallet installed and unlocked, click **Connect OKX Wallet**, approve the connection, and use **Switch to X Layer Testnet** if the wallet is on another chain. The merchant dashboard enables invoice creation only when the connected wallet is on chain 1952. It loads that wallet's persisted invoices from the backend and keeps the Phase 1 read-only DemoAAPL/USD₮0 balance cards available.
 
-After creating an invoice, use **Copy link** to share `/invoice/<uuid>`. Opening that URL in another tab loads the buyer checkout. On X Layer Testnet, the buyer connects OKX Wallet, reviews the exact DemoAAPL or DemoNVDA/USD₮0 quote, may set target allocations and choose **Smart Pay**, or may manually choose an asset, then explicitly approves only the quoted amount and confirms settlement. Smart Spend never submits a transaction automatically. The merchant invoice becomes paid only after that evidence is reconciled. A paid invoice then renders a receipt with the invoice, participants, asset amounts, confirmed timestamp, transaction hash, settlement block, and X Layer Explorer link.
+After creating an invoice, use **Copy link** to share `/pay/<uuid>`. The merchant can keep `/merchant/invoices/<uuid>` open to monitor status and copy the link again. Opening `/pay/<uuid>` in another tab loads the buyer checkout. On X Layer Testnet, the buyer connects OKX Wallet, reviews the exact DemoAAPL or DemoNVDA/USD₮0 quote, may set target allocations and choose **Smart Pay**, or may manually choose an asset, then explicitly approves only the quoted amount and confirms settlement. Smart Spend never submits a transaction automatically. The merchant invoice becomes paid only after that evidence is reconciled. Each role then sees the same verified evidence with role-specific wording.
 
 From the dashboard, **Smart Payment History** has separate merchant and buyer views. Merchant view emphasizes USD₮0 received; buyer view emphasizes DemoAAPL spent. Both views load only `paid` records from persisted Supabase settlement evidence, show the related invoice and timestamp, and link to the verified transaction when its hash is valid. The existing Phase 3 live payment appears in both views when the corresponding merchant or buyer wallet is connected.
 
@@ -243,17 +259,60 @@ The backend exposes the health route, invoice API, Phase 3/5 settlement API, and
 - `POST /api/invoices/<uuid>/reconcile` checks the canonical receipt block and configured confirmation depth, verifies the structured settlement event, stores validated Smart Spend metadata when supplied, and changes the invoice to `paid`.
 - `GET /api/history/merchant?merchantAddress=<wallet>` returns paid invoices whose persisted merchant matches the wallet.
 - `GET /api/history/buyer?buyerAddress=<wallet>` returns paid invoices whose persisted buyer matches the wallet.
+- `POST /api/integration/invoices` creates an invoice for the authenticated server-side merchant credential and accepts an optional `externalOrderReference`.
+- `GET /api/integration/invoices/<uuid>/status` returns the authenticated merchant's verified status, hosted payment URL, and settlement hash after payment.
+
+Integration credentials use `Authorization: Bearer <PORTPAY_TEST_API_KEY>` and are never accepted from browser configuration. If a webhook URL and secret are configured, the backend sends a signed `payment.confirmed` event only after the same canonical receipt/confirmation-depth reconciliation used by the dashboard. Webhook delivery has bounded in-process retries and idempotency headers; delivery failure does not change a verified payment back to pending.
 
 The API validates titles, positive USD₮0 amounts with up to 6 decimals, EVM wallet addresses, UUIDs, and transaction hashes. It returns a clear unavailable response when Supabase/Postgres or the quote signer/contract configuration is not ready. It never marks an invoice paid from client input alone; the reconciliation endpoint requires a successful X Layer Testnet receipt sent to the configured settlement contract with one matching `SettlementExecuted` event. History endpoints filter to `paid` server-side, so pending invoices and client-supplied fake payment records are excluded.
 
+### Integrate PortPay
+
+Merchants can choose either path:
+
+1. **Payment-link flow:** connect the merchant wallet at `/merchant`, create an invoice, and share the returned `/pay/<uuid>` URL.
+2. **Developer integration:** create invoices from the merchant backend, redirect customers to hosted checkout, then retrieve the verified status or consume a signed webhook. No merchant frontend wallet logic or iframe is required.
+
+The current server-to-server endpoints are:
+
+- `POST /api/integration/invoices` — authenticated with `Authorization: Bearer <PORTPAY_TEST_API_KEY>`. Send `{ "title", "amountUsdt0", "externalOrderReference" }`; the merchant address is taken from the server credential. The response includes `invoice.id`, `invoice.status`, `invoice.paymentUrl`, and `invoice.amountUsdt0`.
+- `GET /api/integration/invoices/<uuid>/status` — returns the persisted `pending`/`paid` state, amount, hosted payment URL, optional external reference, and verified transaction fields after payment.
+
+`externalOrderReference` is returned only through authenticated integration responses and signed webhooks. The public hosted-checkout invoice response omits it.
+
+Shortest example from a merchant backend:
+
+```powershell
+$headers = @{ Authorization = "Bearer $env:PORTPAY_TEST_API_KEY" }
+$body = @{ title = "Pro plan"; amountUsdt0 = "20.00"; externalOrderReference = "order-1001" } | ConvertTo-Json
+$invoice = Invoke-RestMethod -Method Post -Uri "$env:PORTPAY_BACKEND_URL/api/integration/invoices" -Headers $headers -ContentType "application/json" -Body $body
+# Redirect the browser to $invoice.invoice.paymentUrl
+$status = Invoke-RestMethod -Method Get -Uri "$env:PORTPAY_BACKEND_URL/api/integration/invoices/$($invoice.invoice.id)/status" -Headers $headers
+```
+
+If `PORTPAY_TEST_WEBHOOK_URL` and `PORTPAY_TEST_WEBHOOK_SECRET` are configured, PortPay sends `payment.confirmed` only after the existing canonical settlement reconciliation succeeds. Verify `x-portpay-signature` as `sha256=HMAC-SHA256(secret, raw JSON body)`, deduplicate with `x-portpay-event-id` or `idempotency-key`, and use the persisted settlement fields in the payload to fulfill the order. Delivery retries are bounded and in-process; there is no durable delivery queue. Concurrent delivery is coalesced in one process, but a restart or repeated reconciliation can deliver the same stable event ID again, so consumers must deduplicate. A failed callback never reverts a verified `paid` invoice. Invoice creation itself is not idempotent: retrying `POST /api/integration/invoices` creates another invoice, while `externalOrderReference` is an indexed correlation value rather than an idempotency key.
+
+The integration layer calls the same invoice repository and reconciliation state used by the dashboard. It does not duplicate or bypass `TestnetSettlementAdapter`. Testnet remains the proven default; mainnet configuration and `OKXDEXMainnetAdapter` are not implemented here.
+
+### Nested product documentation
+
+The running app includes `/docs` pages for the product overview, getting started, how the settlement flow works, merchant integration, and testnet boundaries. The merchant integration page is the recommended reference for a business that wants PortPay inside its existing checkout.
+
+### Canonical reusable messaging
+
+- Product: “PortPay turns tokenized portfolios into a payment method. Customers spend the assets they already hold. Merchants keep pricing and receiving payments in stablecoins.”
+- Business: “Add PortPay to your existing checkout and let customers pay from their tokenized stock portfolio while your business receives stablecoins.”
+- Integration: “Businesses can use PortPay as a hosted payment link or integrate the invoice/payment flow directly into their own website.”
+- Demo close: “PortPay turns tokenized portfolios into a payment method. Customers spend the assets they already hold, businesses keep receiving stablecoins, and merchants can plug PortPay directly into their existing checkout.”
+
 ### Phase 7 judge demo
 
-1. Start the backend and frontend independently, then open `http://localhost:5173` in the merchant tab.
+1. Start the backend and frontend independently, then open `http://localhost:5173/merchant` in the merchant tab.
 2. Connect the merchant OKX Wallet on X Layer Testnet and create a small invoice such as `1.00 USD₮0`.
-3. Copy the generated payment link into a separate buyer tab. The buyer screen shows the invoice title, amount due, chain, wallet step, supported demo balances, optional Smart Spend recommendation, and exact quote before any wallet request.
+3. Copy the generated `/pay/<uuid>` payment link into a separate buyer tab. The buyer screen shows the invoice title, amount due, chain, supported demo balances, optional Smart Spend recommendation, and exact quote before any wallet request.
 4. Connect the buyer OKX Wallet, choose **Smart Pay** or a manual DemoAAPL/DemoNVDA selection, and approve only the quoted asset amount. Confirm the settlement in the wallet.
-5. Return to the merchant tab and open the invoice after reconciliation. Show **Payment received**, exact USD₮0 received, asset spent, receipt timestamp, transaction hash, and **View on X Layer Explorer**.
-6. Scroll to **Smart Payment History** to show the merchant received view. Switch to the buyer view in the same wallet or buyer tab to show what was spent and whether Smart Spend was used.
+5. Return to the merchant tab and open `/merchant/invoices/<uuid>` after reconciliation. Show **Payment received**, exact USD₮0 received, asset spent, receipt timestamp, transaction hash, and **View on X Layer Explorer**.
+6. Keep the buyer tab on `/pay/<uuid>` to show **Payment sent**, what was spent, and whether Smart Spend was used. The merchant dashboard history separately emphasizes what the merchant received.
 
 The product remains intentionally explicit about the demo boundary: DemoAAPL and DemoNVDA are ordinary test assets, not official xStocks or real Apple/NVIDIA-backed securities; the X Layer Testnet flow is portfolio settlement, not an OKX DEX swap; and no mainnet transaction is required.
 

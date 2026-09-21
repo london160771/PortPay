@@ -4,12 +4,12 @@
   "version": "0.1.0",
   "type": "module",
   "scripts": {
-    "dev": "vite --host 0.0.0.0",
+    "dev": "vite --host 0.0.0.0 --configLoader runner",
     "start": "vite preview --host 0.0.0.0",
-    "build": "tsc -b && vite build",
+    "build": "tsc -b && vite build --configLoader runner",
     "typecheck": "tsc -b --pretty false",
     "lint": "eslint .",
-    "test": "vitest run --config vitest.config.ts"
+    "test": "vitest run --config vitest.config.ts --configLoader runner"
   },
   "dependencies": {
     "@tanstack/react-query": "^5.90.2",

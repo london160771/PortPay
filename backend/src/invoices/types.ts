@@ -6,6 +6,7 @@ export type Invoice = {
   title: string;
   amountUsdt0: string;
   merchantAddress: string;
+  externalOrderReference?: string;
   paymentUrl: string;
   status: InvoiceStatus;
   createdAt: string;

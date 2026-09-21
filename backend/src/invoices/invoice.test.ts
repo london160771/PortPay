@@ -34,6 +34,7 @@ describe('merchant invoice API', () => {
       title: 'Precision regression',
       amount_usdt0: '9007199254740993.000000',
       merchant_address: MERCHANT,
+      external_order_reference: null,
       payment_url: 'http://localhost:5173/invoice/00000000-0000-4000-8000-000000000099',
       status: 'paid',
       created_at: '2026-09-17T00:00:00.000Z',
@@ -82,7 +83,7 @@ describe('merchant invoice API', () => {
       expect(created.invoice.amountUsdt0).toBe('20');
       expect(created.invoice.merchantAddress).toBe(MERCHANT);
       expect(created.invoice.status).toBe('pending');
-      expect(created.invoice.paymentUrl).toBe(`http://localhost:5173/invoice/${created.invoice.id}`);
+      expect(created.invoice.paymentUrl).toBe(`http://localhost:5173/pay/${created.invoice.id}`);
       expect(await repository.findById(created.invoice.id)).toEqual(created.invoice);
 
       const listResponse = await fetch(`${baseUrl}/api/invoices?merchantAddress=${MERCHANT}`);
@@ -201,7 +202,19 @@ describe('merchant invoice API', () => {
         };
       },
     };
-    const app = createApp(repository, adapter);
+    const deliveredInvoices: Invoice[] = [];
+    const app = createApp(repository, adapter, {
+      merchantAuth: {
+        credentials: [{
+          environment: 'test',
+          apiKey: 'integration-test-key',
+          merchantAddress: MERCHANT,
+          webhookUrl: 'https://merchant.example.test/webhooks/portpay',
+          webhookSecret: 'server-only-webhook-secret-123456',
+        }],
+      },
+      webhookDelivery: async (paidInvoice) => { deliveredInvoices.push(paidInvoice); },
+    });
     const buyer = '0x2222222222222222222222222222222222222222';
     const txHash = '0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef';
 
@@ -239,6 +252,8 @@ describe('merchant invoice API', () => {
       expect(reconciled.invoice.smartSpendUsed).toBe(true);
       expect(reconciled.invoice.smartSpendRecommendedAsset).toBe('demoNvda');
       expect(reconciled.invoice.smartSpendReason).toMatch(/8% above/);
+      expect(deliveredInvoices).toHaveLength(1);
+      expect(deliveredInvoices[0]).toMatchObject({ id: created.invoice.id, status: 'paid', paymentTxHash: txHash });
 
       const duplicateResponse = await fetch(`${baseUrl}/api/invoices/${created.invoice.id}/reconcile`, {
         method: 'POST',
@@ -246,6 +261,7 @@ describe('merchant invoice API', () => {
         body: JSON.stringify({ txHash: '0xabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcd', buyerAddress: buyer }),
       });
       expect(duplicateResponse.status).toBe(409);
+      expect(deliveredInvoices).toHaveLength(1);
     });
   });
 
@@ -299,6 +315,75 @@ describe('merchant invoice API', () => {
       expect(invalidResponse.status).toBe(400);
       const missingResponse = await fetch(`${baseUrl}/api/history/merchant`);
       expect(missingResponse.status).toBe(400);
+    });
+  });
+
+  it('requires server-side merchant authentication for external invoice integration', async () => {
+    const repository = new InMemoryInvoiceRepository();
+    const app = createApp(repository, undefined, {
+      merchantAuth: {
+        credentials: [{
+          environment: 'test',
+          apiKey: 'integration-test-key',
+          merchantAddress: MERCHANT,
+        }, {
+          environment: 'test',
+          apiKey: 'other-integration-key',
+          merchantAddress: OTHER_MERCHANT,
+        }],
+      },
+    });
+
+    await withServer(app, async (baseUrl) => {
+      const unauthenticated = await fetch(`${baseUrl}/api/integration/invoices`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ title: 'External order', amountUsdt0: '3.50' }),
+      });
+      expect(unauthenticated.status).toBe(401);
+
+      const createdResponse = await fetch(`${baseUrl}/api/integration/invoices`, {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          authorization: 'Bearer integration-test-key',
+        },
+        body: JSON.stringify({
+          title: 'External order',
+          amountUsdt0: '3.50',
+          externalOrderReference: 'order-1001',
+          merchantAddress: OTHER_MERCHANT,
+          status: 'paid',
+        }),
+      });
+      const created = (await createdResponse.json()) as { invoice: Invoice };
+      expect(createdResponse.status).toBe(201);
+      expect(created.invoice.merchantAddress).toBe(MERCHANT);
+      expect(created.invoice.status).toBe('pending');
+      expect(created.invoice.externalOrderReference).toBe('order-1001');
+      expect(created.invoice.paymentUrl).toBe(`http://localhost:5173/pay/${created.invoice.id}`);
+
+      const checkoutResponse = await fetch(`${baseUrl}/api/invoices/${created.invoice.id}`);
+      const checkout = (await checkoutResponse.json()) as { invoice: Invoice };
+      expect(checkoutResponse.status).toBe(200);
+      expect(checkout.invoice.externalOrderReference).toBeUndefined();
+
+      const statusResponse = await fetch(`${baseUrl}/api/integration/invoices/${created.invoice.id}/status`, {
+        headers: { authorization: 'Bearer integration-test-key' },
+      });
+      const status = (await statusResponse.json()) as { invoiceId: string; status: string; paymentUrl: string };
+      expect(statusResponse.status).toBe(200);
+      expect(status).toMatchObject({ invoiceId: created.invoice.id, status: 'pending', paymentUrl: created.invoice.paymentUrl });
+
+      const otherMerchantResponse = await fetch(`${baseUrl}/api/integration/invoices/${created.invoice.id}/status`, {
+        headers: { authorization: 'Bearer other-integration-key' },
+      });
+      expect(otherMerchantResponse.status).toBe(404);
+
+      const invalidKey = await fetch(`${baseUrl}/api/integration/invoices/${created.invoice.id}/status`, {
+        headers: { authorization: 'Bearer wrong-key' },
+      });
+      expect(invalidKey.status).toBe(401);
     });
   });
 });
