@@ -8,15 +8,15 @@ The core message is simple: **PortPay turns tokenized portfolios into a payment 
 
 ## Current project status
 
-**Pre-mainnet product readiness pass: role-separated merchant/buyer views, nested documentation, authenticated merchant integration, and the existing testnet payment proof are in place. No mainnet test is approved or required.**
+**Mainnet Phase 1 preparation: role-separated merchant/buyer views, nested documentation, authenticated merchant integration, the existing testnet payment proof, and an isolated read-only `OKXDEXMainnetAdapter` are in place. Mainnet execution remains disabled; no mainnet test is approved or required.**
 
-The repository now contains independent frontend, backend, and Foundry contract workspaces, an OKX Wallet-aware merchant dashboard, Supabase/Postgres-backed invoice persistence, unique shareable invoice links, a buyer checkout for DemoAAPL and DemoNVDA, signed short-lived multi-asset settlement quotes, the two-asset `PortPaySettlement` contract, verified-event invoice reconciliation, transaction-backed payment receipts, paid-only Smart Payment History for buyer and merchant views, and deterministic Smart Spend recommendations. No mainnet functionality is required or configured.
+The repository now contains independent frontend, backend, and Foundry contract workspaces, an OKX Wallet-aware merchant dashboard, Supabase/Postgres-backed invoice persistence, unique shareable invoice links, a buyer checkout for DemoAAPL and DemoNVDA, signed short-lived multi-asset settlement quotes, the two-asset `PortPaySettlement` contract, verified-event invoice reconciliation, transaction-backed payment receipts, paid-only Smart Payment History for buyer and merchant views, deterministic Smart Spend recommendations, and a server-side read-only chain-196 OKX V6 preparation path. No mainnet transaction execution is enabled.
 
 Frontend and backend verification pass locally. The pinned Windows Foundry release remains in the ignored `contracts/.tools/foundry` directory, so WSL is not required by the project; this UX/integration pass made no contract changes and did not send transactions.
 
-PortPay now prepares ERC-8021 Builder Code suffixes for eligible browser-wallet approval and settlement transactions and checks registry registration and payout before requesting a wallet signature. The configured code is registered and was verified on a real attributed testnet payment. `OKXDEXMainnetAdapter` remains deferred. The Phase 3 proof used Supabase/Postgres, a dedicated quote signer, funded testnet contracts, test OKB, and separate buyer/merchant wallets. Phase 5 added and deployed DemoNVDA plus the two-asset settlement contract; the Phase 6 live proof used DemoAAPL.
+PortPay now prepares ERC-8021 Builder Code suffixes for eligible browser-wallet approval and settlement transactions and checks registry registration and payout before requesting a wallet signature. The configured testnet code is registered and was verified on a real attributed testnet payment. `OKXDEXMainnetAdapter` is implemented only as an isolated read-only preparation layer. The Phase 3 proof used Supabase/Postgres, a dedicated quote signer, funded testnet contracts, test OKB, and separate buyer/merchant wallets. Phase 5 added and deployed DemoNVDA plus the two-asset settlement contract; the Phase 6 live proof used DemoAAPL.
 
-The pre-mainnet readiness pass keeps that working flow compact and judge-friendly: merchant and buyer routes are visibly separate, each role receives role-specific receipt wording, buyer checkout leads with the amount due and exact quote, Smart Spend remains buyer-only and deterministic, and merchant integration sits above the existing invoice/reconciliation layer. Testnet and demo-asset disclosures remain visible throughout. No settlement, contract, Builder Code, or mainnet behavior changed.
+The pre-mainnet readiness pass keeps that working flow compact and judge-friendly: merchant and buyer routes are visibly separate, each role receives role-specific receipt wording, buyer checkout leads with the amount due and exact quote, Smart Spend remains buyer-only and deterministic, and merchant integration sits above the existing invoice/reconciliation layer. Testnet and demo-asset disclosures remain visible throughout. The mainnet adapter is isolated, preparation-only, and does not change settlement, contracts, or the proven testnet Builder Code flow.
 
 ## Stack
 
@@ -59,6 +59,8 @@ Express API (backend/)
   ├── authenticated merchant integration API and signed payment notifications
   ├── Supabase/Postgres invoice repository
   ├── `TestnetSettlementAdapter` quote signing
+  ├── isolated `OKXDEXMainnetAdapter` read-only quote/transaction preparation
+  ├── server-side authenticated OKX V6 DEX API client
   ├── deterministic Smart Spend allocation and target rules
   ├── canonical, confirmed settlement-event reconciliation
   └── paid-only receipt and Smart Payment History queries
@@ -83,9 +85,48 @@ The merchant API is also role-separated from the browser: server-side merchant c
 The adapter boundary is documented for the later phases:
 
 - `TestnetSettlementAdapter` — implemented for signed quotes and canonical, confirmed-event reconciliation on X Layer Testnet.
-- `OKXDEXMainnetAdapter` — future optional X Layer Mainnet OKX DEX Swap API path.
+- `OKXDEXMainnetAdapter` — isolated X Layer Mainnet OKX V6 read-only preparation path; broadcasting is disabled.
 
-The mainnet adapter is not implemented. Settlement remains testnet-only in the current phase.
+The mainnet adapter does not broadcast, approve, deploy, or send swaps. Settlement remains testnet-only until a separately approved live mainnet phase.
+
+## X Layer Mainnet preparation (read-only)
+
+Mainnet preparation is isolated from the proven testnet flow:
+
+```text
+chain 196 → OKXDEXMainnetAdapter → wNVDAx / wAAPLx → USD₮0 directly to the merchant
+```
+
+The server-side adapter uses the authenticated OKX V6 DEX API at its pinned official origin for quotes, exact approval calldata, and swap transaction preparation. It validates chain `196`, independently verified xStock and USD₮0 addresses, decoded invoice merchant recipient, decoded tokens and amounts, quote freshness, minimum receive amount, router, spender, and exact approval amount. Unsupported router call shapes fail closed. It has no active broadcast method.
+
+Current mainnet addresses:
+
+| Asset | Address | Decimals |
+| --- | --- | ---: |
+| `wNVDAx` | `0xa8ddb5cd96b5222afe198316e9a57caa642850d5` | 18 |
+| `wAAPLx` | `0x943bf64d566c32a2bcd41ac92fb63c111cc9de8f` | 18 |
+| Official mainnet `USD₮0` | `0x779Ded0c9e1022225f8E0630b35a9b54bE713736` | 6 |
+
+The official mainnet Builder Code registry is `0xd6c426f9c077358735622ae5a83468dc0510823b`. Mainnet Builder Code registration remains intentionally pending.
+
+Configure the following only in the backend environment. Never place OKX credentials in frontend configuration:
+
+```text
+X_LAYER_MAINNET_RPC_URL=https://rpc.xlayer.tech
+X_LAYER_MAINNET_EXPLORER_URL=https://www.okx.com/web3/explorer/xlayer
+MAINNET_WNVDA_ADDRESS=
+MAINNET_WAAPL_ADDRESS=
+MAINNET_USDT0_ADDRESS=
+PORTPAY_MAINNET_BUILDER_CODE=
+MAINNET_QUOTE_TTL_SECONDS=60
+OKX_DEX_API_KEY=
+OKX_DEX_SECRET_KEY=
+OKX_DEX_PASSPHRASE=
+```
+
+`PORTPAY_MAINNET_BUILDER_CODE` is intentionally empty until a separate mainnet Builder Code is registered. The adapter can prepare, but not send, ERC-8021 suffixes for approval and swap calldata. No mainnet Builder Code registration or transaction has been performed.
+
+The visible product remains testnet-first. A mainnet selector is not enabled while mainnet execution is disabled; changing a future mode must select the complete chain, token, adapter, API, Builder Code, and explorer configuration rather than only switching the wallet network. The backend uses `viem` 2.56 or newer, satisfying the ERC-8021 helper's documented 2.45 minimum.
 
 ## X Layer Testnet configuration
 
@@ -176,7 +217,7 @@ Copy-Item backend/.env.example backend/.env
 The examples contain no secrets. Keep populated `.env` files local and never commit private keys, seed phrases, Supabase secrets, API credentials, or mainnet credentials.
 
 Frontend variables are prefixed with `VITE_` because Vite exposes them to browser code. Backend variables remain server-side. `VITE_BACKEND_URL`, `PUBLIC_APP_URL`, `SUPABASE_URL`, and `SUPABASE_SERVICE_ROLE_KEY` must be configured for a live invoice demo. `DATABASE_URL` is retained for Supabase/Postgres migration tooling. Do not expose the service-role key or `PORTPAY_*_API_KEY` values to the frontend.
-External merchant integrations use the server-only `PORTPAY_TEST_API_KEY` and `PORTPAY_TEST_MERCHANT_ADDRESS` pair. Generate an API key with at least 32 high-entropy characters. Optional signed callbacks use a trusted operator-configured HTTPS `PORTPAY_TEST_WEBHOOK_URL`; literal local/private destinations are rejected. `PORTPAY_TEST_WEBHOOK_SECRET` must contain at least 32 high-entropy characters. No mainnet merchant credentials or chain configuration are introduced by this pass.
+External merchant integrations use the server-only `PORTPAY_TEST_API_KEY` and `PORTPAY_TEST_MERCHANT_ADDRESS` pair. Generate an API key with at least 32 high-entropy characters. Optional signed callbacks use a trusted operator-configured HTTPS `PORTPAY_TEST_WEBHOOK_URL`; literal local/private destinations are rejected. `PORTPAY_TEST_WEBHOOK_SECRET` must contain at least 32 high-entropy characters. Mainnet OKX API credentials belong only to the isolated backend preparation client and are never used by this merchant integration or the testnet path.
 Production frontend deployments must set `VITE_BACKEND_URL` at build time; API requests fail clearly when it is omitted. Production backend startup requires explicit `PUBLIC_APP_URL` and `CORS_ORIGIN`. Localhost defaults apply only to development, so check all three public origins when deploying the two-tab demo.
 
 The Phase 3/5 backend also requires `QUOTE_SIGNER_PRIVATE_KEY`, `DEMO_AAPL_REFERENCE_PRICE_USD` (default `250.00` demo USD), `DEMO_NVDA_REFERENCE_PRICE_USD` (default `180.00` demo USD), and `QUOTE_TTL_SECONDS` (default `300`, allowed range `1`–`300`). The quote signer address must match `QUOTE_SIGNER_ADDRESS` used when deploying `PortPaySettlement`. The private key is server-only and must never be placed in the frontend environment.
@@ -292,7 +333,7 @@ $status = Invoke-RestMethod -Method Get -Uri "$env:PORTPAY_BACKEND_URL/api/integ
 
 If `PORTPAY_TEST_WEBHOOK_URL` and `PORTPAY_TEST_WEBHOOK_SECRET` are configured, PortPay sends `payment.confirmed` only after the existing canonical settlement reconciliation succeeds. Verify `x-portpay-signature` as `sha256=HMAC-SHA256(secret, raw JSON body)`, deduplicate with `x-portpay-event-id` or `idempotency-key`, and use the persisted settlement fields in the payload to fulfill the order. Delivery retries are bounded and in-process; there is no durable delivery queue. Concurrent delivery is coalesced in one process, but a restart or repeated reconciliation can deliver the same stable event ID again, so consumers must deduplicate. A failed callback never reverts a verified `paid` invoice. Invoice creation itself is not idempotent: retrying `POST /api/integration/invoices` creates another invoice, while `externalOrderReference` is an indexed correlation value rather than an idempotency key.
 
-The integration layer calls the same invoice repository and reconciliation state used by the dashboard. It does not duplicate or bypass `TestnetSettlementAdapter`. Testnet remains the proven default; mainnet configuration and `OKXDEXMainnetAdapter` are not implemented here.
+The integration layer calls the same invoice repository and reconciliation state used by the dashboard. It does not duplicate or bypass `TestnetSettlementAdapter`. Testnet remains the proven default; the separate `OKXDEXMainnetAdapter` is not connected to this API or to any execution route.
 
 ### Nested product documentation
 
@@ -405,7 +446,8 @@ The Phase 7 product pass is presentation-only. It preserves the existing settlem
 - The Phase 5 testnet setup is recorded below. A deployed demo asset and minted balance require a burner wallet, test OKB, and explicit local deployment commands when reproducing the proof.
 - `DemoAAPL` is a centrally minted test asset for demos and is not an official xStock or backed by Apple shares.
 - The official USD₮0 address and six-decimal metadata are verified from the current docs and a read-only testnet RPC call.
+- Mainnet Phase 1 is preparation-only. It has no API route, browser-wallet integration, simulation gate, registered mainnet Builder Code, or transaction broadcast method. Its allowlist accepts only decoded OKX router calls with an explicit merchant receiver and structured base request; unsupported router call shapes fail closed until separately reviewed.
 
 ## Source-of-truth and phase discipline
 
-`AGENTS.md` defines repository workflow and approval gates. `PORTPAY_SPEC.md` defines the product, architecture, scope, and phased build plan. Only one named phase may be active at a time. Phase 3 implementation and the first live testnet proof are complete, Phase 4 receipts/history implementation is complete, Phase 5 Smart Spend implementation is complete, Phase 6 Builder Codes is closed with verified attributed settlement evidence, and Phase 7 product polish is implemented. Checkpoint C review was performed on 2026-09-21; local fixes await approval and the final human two-tab wallet check. Optional Phase 8 requires separate explicit approval and another pre-mainnet review.
+`AGENTS.md` defines repository workflow and approval gates. `PORTPAY_SPEC.md` defines the product, architecture, scope, and phased build plan. Only one named phase may be active at a time. Phase 3 implementation and the first live testnet proof are complete, Phase 4 receipts/history implementation is complete, Phase 5 Smart Spend implementation is complete, Phase 6 Builder Codes is closed with verified attributed settlement evidence, Phase 7 product polish is implemented, and Mainnet Phase 1 adds an unconnected preparation-only adapter. Checkpoint C review was performed on 2026-09-21. Optional Phase 8 requires separate explicit approval and another pre-mainnet review.

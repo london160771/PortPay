@@ -242,6 +242,10 @@ The mainnet path is intentionally separated from the required testnet MVP.
 
 `OKXDEXMainnetAdapter` is the future replacement for `TestnetSettlementAdapter`. It may use the OKX DEX Swap API on X Layer Mainnet to route a real eligible xStock/unified tokenized stock into the merchant’s requested stablecoin, then produce the same PortPay receipt/history shape.
 
+### Mainnet Phase 1 — isolated adapter preparation
+
+The current mainnet implementation phase is preparation-only. It may add isolated chain-196 configuration, a server-side authenticated OKX V6 DEX API client, read-only quote/approval/swap transaction preparation, direct merchant-recipient validation, and ERC-8021 suffix preparation. It must not fund wallets, approve tokens, deploy contracts, register a mainnet Builder Code, broadcast transactions, or modify the proven testnet settlement path. Mainnet execution remains disabled until the adapter passes review and the user explicitly approves a live proof.
+
 The optional mainnet proof is allowed only when all of the following are true:
 
 - the user explicitly approves the mainnet test and provides/approves the funds;
@@ -391,9 +395,13 @@ Current implementation note (2026-09-21): the product surfaces now present a thr
 
 Before any optional mainnet work, PortPay may complete a focused readiness pass without starting `OKXDEXMainnetAdapter`. This pass may add role-separated merchant and buyer routes, nested product documentation, and a minimal server-to-server merchant integration above the invoice/payment layer. Merchant API authentication, external order references, and signed payment notifications must remain server-side, fail closed, and reuse the existing verified invoice/reconciliation path. No new settlement logic, mainnet configuration, network selector, live transaction, or contract change is part of this pass.
 
+### Mainnet Phase 1 — isolated adapter preparation
+
+The current mainnet implementation phase is preparation-only. It may add isolated chain-196 configuration, a server-side authenticated OKX V6 DEX API client, read-only quote/approval/swap transaction preparation, direct merchant-recipient validation, and ERC-8021 suffix preparation. It must not fund wallets, approve tokens, deploy contracts, register a mainnet Builder Code, broadcast transactions, or modify the proven testnet settlement path. Mainnet execution remains disabled until the adapter passes review and the user explicitly approves a live proof.
+
 ### Optional Phase 8 — Tiny mainnet proof
 
-Only after the Phase 7 Sol High review and separate explicit user approval. Implement/use `OKXDEXMainnetAdapter` for one deliberately tiny real xStock-to-stablecoin proof if the route, funds, and safety conditions are available. This phase is optional and must not delay or weaken the testnet submission.
+Only after the Mainnet Phase 1 preparation, the Phase 7 Sol High review, and separate explicit user approval. Enable `OKXDEXMainnetAdapter` for one deliberately tiny real xStock-to-stablecoin proof if the route, funds, Builder Code registration, and safety conditions are available. This phase is optional and must not delay or weaken the testnet submission.
 
 ## 14. Change-control rule
 

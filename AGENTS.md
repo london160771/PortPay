@@ -256,9 +256,17 @@ The current implementation boundary is a server-signed EIP-712 quote plus canoni
 - A separate pre-mainnet readiness pass may add role-separated merchant/buyer routes, nested product documentation, and a minimal authenticated server-to-server merchant integration above the invoice/payment layer. It must not start `OKXDEXMainnetAdapter`, add mainnet configuration, change settlement/security logic, send transactions, or bypass the existing verified reconciliation path.
 - Stop for GPT-5.6 Sol High review before final submission or any mainnet test.
 
+### Mainnet Phase 1 — isolated adapter preparation
+
+- Add only isolated chain-196 configuration and server-side authenticated OKX V6 read-only quote/transaction preparation.
+- Keep `OKXDEXMainnetAdapter` preparation-only: no wallet funding, approvals, deployments, Builder Code registration, broadcasts, or mainnet transactions.
+- Validate direct merchant-recipient preparation, exact approvals, quote freshness, router/spender binding, and ERC-8021 suffix construction.
+- Do not modify `TestnetSettlementAdapter`, testnet addresses, or the proven testnet flow.
+- Do not enable live mainnet execution until the user explicitly approves it after the required Sol High review.
+
 ### Optional Phase 8 — tiny mainnet proof
 
-- Only with explicit user approval, available funds, verified official xStock route, and completed pre-mainnet Sol High review.
+- Only after the isolated Mainnet Phase 1 preparation, with explicit user approval, available funds, verified official xStock route, and completed pre-mainnet Sol High review.
 - Use `OKXDEXMainnetAdapter`.
 - Keep it tiny and separately documented.
 - Do not let it replace or weaken the testnet demo.
