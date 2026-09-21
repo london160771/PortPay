@@ -252,6 +252,7 @@ The current implementation boundary is a server-signed EIP-712 quote plus canoni
 - Make testnet/demo limitations prominent.
 - Update README, `PORTPAY_SPEC.md`, and `AGENTS.md` for all material changes.
 - Prepare the two-tab judge demo and final evidence.
+- Current implementation note (2026-09-21): the merchant and buyer surfaces use a three-step handoff, touch-friendly actions, explicit loading/empty/success/failure states, and isolated development-only Builder Code diagnostics. The presentation pass does not change settlement, quote, Smart Spend, history, or Builder Code logic.
 - Stop for GPT-5.6 Sol High review before final submission or any mainnet test.
 
 ### Optional Phase 8 — tiny mainnet proof

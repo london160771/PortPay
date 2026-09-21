@@ -6,13 +6,15 @@ PortPay is a payment-layer foundation for paying with tokenized portfolio assets
 
 ## Current project status
 
-**Phase 6 — Builder Codes: registered-code attribution has been verified on X Layer Testnet; GPT-5.6 Sol High Checkpoint B remains required before approval. Phase 7 has not started.**
+**Phase 7 — Product polish and final submission readiness: the merchant/buyer demo, receipt, Smart Spend, and Smart Payment History surfaces have been polished for final review. GPT-5.6 Sol High Checkpoint C remains required before final submission or any mainnet test.**
 
 The repository now contains independent frontend, backend, and Foundry contract workspaces, an OKX Wallet-aware merchant dashboard, Supabase/Postgres-backed invoice persistence, unique shareable invoice links, a buyer checkout for DemoAAPL and DemoNVDA, signed short-lived multi-asset settlement quotes, the two-asset `PortPaySettlement` contract, verified-event invoice reconciliation, transaction-backed payment receipts, paid-only Smart Payment History for buyer and merchant views, and deterministic Smart Spend recommendations. No mainnet functionality is required or configured.
 
 Frontend, backend, and Foundry verification pass locally. Foundry was run from the repository's bundled Windows release in the ignored `contracts/.tools/foundry` directory, so WSL is not required.
 
 PortPay now prepares ERC-8021 Builder Code suffixes for eligible browser-wallet approval and settlement transactions and checks registry registration and payout before requesting a wallet signature. The configured code is registered and was verified on a real attributed testnet payment. `OKXDEXMainnetAdapter` remains deferred. The Phase 3 proof used Supabase/Postgres, a dedicated quote signer, funded testnet contracts, test OKB, and separate buyer/merchant wallets. Phase 5 added and deployed DemoNVDA plus the two-asset settlement contract; the Phase 6 live proof used DemoAAPL.
+
+Phase 7 adds a judge-friendly product surface around that working flow: the merchant home screen explains the three-step handoff, invoice creation and sharing are visually prioritized, buyer checkout leads with the amount due and exact quote, Smart Spend is clearly optional and deterministic, and confirmed receipts lead with the amount received and explorer evidence. Testnet and demo-asset disclosures remain visible throughout. No settlement, contract, Builder Code, or mainnet behavior changed.
 
 ## Stack
 
@@ -243,6 +245,17 @@ The backend exposes the health route, invoice API, Phase 3/5 settlement API, and
 
 The API validates titles, positive USD₮0 amounts with up to 6 decimals, EVM wallet addresses, UUIDs, and transaction hashes. It returns a clear unavailable response when Supabase/Postgres or the quote signer/contract configuration is not ready. It never marks an invoice paid from client input alone; the reconciliation endpoint requires a successful X Layer Testnet receipt sent to the configured settlement contract with one matching `SettlementExecuted` event. History endpoints filter to `paid` server-side, so pending invoices and client-supplied fake payment records are excluded.
 
+### Phase 7 judge demo
+
+1. Start the backend and frontend independently, then open `http://localhost:5173` in the merchant tab.
+2. Connect the merchant OKX Wallet on X Layer Testnet and create a small invoice such as `1.00 USD₮0`.
+3. Copy the generated payment link into a separate buyer tab. The buyer screen shows the invoice title, amount due, chain, wallet step, supported demo balances, optional Smart Spend recommendation, and exact quote before any wallet request.
+4. Connect the buyer OKX Wallet, choose **Smart Pay** or a manual DemoAAPL/DemoNVDA selection, and approve only the quoted asset amount. Confirm the settlement in the wallet.
+5. Return to the merchant tab and open the invoice after reconciliation. Show **Payment received**, exact USD₮0 received, asset spent, receipt timestamp, transaction hash, and **View on X Layer Explorer**.
+6. Scroll to **Smart Payment History** to show the merchant received view. Switch to the buyer view in the same wallet or buyer tab to show what was spent and whether Smart Spend was used.
+
+The product remains intentionally explicit about the demo boundary: DemoAAPL and DemoNVDA are ordinary test assets, not official xStocks or real Apple/NVIDIA-backed securities; the X Layer Testnet flow is portfolio settlement, not an OKX DEX swap; and no mainnet transaction is required.
+
 ### Contracts
 
 On Windows, use Git for Windows Bash and the official [Foundry installation](https://book.getfoundry.sh/getting-started/installation) instead of requiring WSL:
@@ -311,6 +324,10 @@ The frontend Builder Code path is covered by `builderCodes.test.ts` tests for ER
 
 Before broadcasting, compare the deployed `quoteSigner`, `demoAsset`, `demoNvda`, and `stablecoin` getters against the backend signer, both demo asset addresses, and official testnet USD₮0 address. The deployment script requires the official USD₮0 address; the funding script checks that the target settlement contract reports the same stablecoin. The backend rejects a non-1952 RPC, filters receipt events to the configured settlement contract, binds the receipt sender to the buyer, and requires a canonical receipt block with two confirmations by default (`SETTLEMENT_CONFIRMATION_DEPTH`). Reconciliation uses the contract-verified asset amount in the event, so changing the demo reference price after signing cannot strand a successful payment. The contract checks the buyer's exact asset debit, its exact asset receipt, and the merchant's exact stablecoin receipt; fee-on-transfer tokens revert the entire settlement.
 
+## Phase 7 verification
+
+The Phase 7 product pass is presentation-only. It preserves the existing settlement, quote, Smart Spend, history, Builder Code, and receipt data paths. The responsive layout is built around touch-sized actions, stacked mobile cards, compact wallet/status pills, and a single primary action per stage. The development-only Builder Code diagnostics route remains isolated at `/__builder-code-debug`; registry diagnostics are no longer appended to normal buyer-facing payment errors.
+
 ## Known limitations and deferred work
 
 - Live Supabase/Postgres credentials and all three migrations are required for any reproduction. The Phase 2/3 migrations were applied for the recorded proof; the Phase 5 Smart Spend migration must be applied before completed Smart Pay payments can persist their metadata.
@@ -330,4 +347,4 @@ Before broadcasting, compare the deployed `quoteSigner`, `demoAsset`, `demoNvda`
 
 ## Source-of-truth and phase discipline
 
-`AGENTS.md` defines repository workflow and approval gates. `PORTPAY_SPEC.md` defines the product, architecture, scope, and phased build plan. Only one named phase may be active at a time. Phase 3 implementation and the first live testnet proof are complete, Phase 4 receipts/history implementation is complete, Phase 5 Smart Spend implementation is complete, and Phase 6 Builder Codes has a verified real attributed settlement and is ready for GPT-5.6 Sol High Checkpoint B review. Phase 7 has not started.
+`AGENTS.md` defines repository workflow and approval gates. `PORTPAY_SPEC.md` defines the product, architecture, scope, and phased build plan. Only one named phase may be active at a time. Phase 3 implementation and the first live testnet proof are complete, Phase 4 receipts/history implementation is complete, Phase 5 Smart Spend implementation is complete, Phase 6 Builder Codes is closed with verified attributed settlement evidence, and Phase 7 product polish is implemented. GPT-5.6 Sol High Checkpoint C remains required before final submission or any mainnet test.

@@ -93,13 +93,13 @@ function TokenBalanceCard({ asset, account, canRead }: TokenBalanceCardProps) {
   }
 
   return (
-    <article className="rounded-3xl border border-ink/10 bg-white p-5 shadow-sm">
+    <article className="portpay-appear rounded-3xl border border-ink/10 bg-paper p-5 shadow-panel transition hover:-translate-y-0.5 hover:shadow-soft">
       <div className="flex items-start justify-between gap-4">
         <div>
-          <p className="text-xs font-semibold uppercase tracking-[0.16em] text-ink/45">Testnet balance</p>
+          <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-ink/45">Wallet balance</p>
           <h3 className="mt-2 text-xl font-semibold tracking-tight">{asset.label}</h3>
         </div>
-        <span className="rounded-full bg-mint px-3 py-1 text-xs font-bold text-ink">READ ONLY</span>
+        <span className="rounded-full bg-mint/75 px-3 py-1 text-[10px] font-bold uppercase tracking-[0.12em] text-ink">Testnet</span>
       </div>
       <p className="mt-3 min-h-12 text-sm leading-6 text-ink/55">{asset.description}</p>
       <p className="mt-6 text-3xl font-semibold tracking-tight">
@@ -119,13 +119,15 @@ function WalletPanel() {
   const canReadBalances = networkState === 'ready' && Boolean(address);
 
   return (
-    <section className="rounded-[2rem] border border-ink/10 bg-ink p-6 text-white shadow-soft sm:p-8">
+    <section className="portpay-appear relative overflow-hidden rounded-[2rem] border border-white/10 bg-ink p-6 text-white shadow-soft sm:p-8">
+      <div className="portpay-grid pointer-events-none absolute inset-0 opacity-30" />
+      <div className="relative">
       <div className="flex flex-col gap-5 sm:flex-row sm:items-start sm:justify-between">
         <div>
-          <p className="text-xs font-semibold uppercase tracking-[0.18em] text-mint/75">Dashboard wallet</p>
-          <h2 className="mt-2 text-2xl font-semibold tracking-tight">OKX Wallet · X Layer Testnet</h2>
+          <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-mint/75">Merchant wallet</p>
+          <h2 className="mt-2 text-2xl font-semibold tracking-tight">Ready to collect</h2>
           <p className="mt-2 max-w-xl text-sm leading-6 text-white/60">
-            Connect a wallet to create merchant invoices and view its persisted payment history. PortPay accepts invoice creation only on chain ID 1952.
+            Connect OKX Wallet to create invoices, share payment links, and watch confirmed receipts arrive on X Layer Testnet.
           </p>
         </div>
         <span
@@ -193,14 +195,15 @@ function WalletPanel() {
       <div className="mt-7 grid gap-3 border-t border-white/10 pt-5 text-xs text-white/45 sm:grid-cols-2">
         <span>Network: {xLayerTestnet.name}</span>
         <span>Chain ID: {portPayNetworkConfig.chainId}</span>
-        <span>Gas token: {xLayerTestnet.nativeCurrency.symbol}</span>
-        <span>Invoice storage: Supabase/Postgres</span>
+        <span>Gas: {xLayerTestnet.nativeCurrency.symbol}</span>
+        <span>Invoices: Supabase/Postgres</span>
       </div>
 
       <div className="mt-6 grid gap-4 lg:grid-cols-2">
         <TokenBalanceCard asset={testnetAssets.demoAapl} account={address} canRead={canReadBalances} />
         <TokenBalanceCard asset={testnetAssets.demoNvda} account={address} canRead={canReadBalances} />
         <TokenBalanceCard asset={testnetAssets.usdt0} account={address} canRead={canReadBalances} />
+      </div>
       </div>
     </section>
   );
@@ -222,7 +225,8 @@ function CopyButton({ value }: { value: string }) {
   return (
     <button
       type="button"
-      className="rounded-xl bg-ink px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-ink/80"
+      aria-label="Copy payment link"
+      className="rounded-xl bg-ink px-4 py-2.5 text-sm font-semibold text-white transition hover:-translate-y-0.5 hover:bg-ink/80"
       onClick={copyValue}
     >
       {copied ? 'Copied' : 'Copy link'}
@@ -266,12 +270,12 @@ function InvoiceForm({
   }
 
   return (
-    <section className="rounded-3xl border border-ink/10 bg-white p-6 shadow-sm sm:p-7">
+    <section id="create-invoice" className="portpay-appear rounded-3xl border border-ink/10 bg-paper p-6 shadow-panel sm:p-7">
       <div>
-        <p className="text-xs font-semibold uppercase tracking-[0.16em] text-ink/45">Create invoice</p>
-        <h2 className="mt-2 text-2xl font-semibold tracking-tight">Request USD₮0 from a customer</h2>
+        <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-ink/45">Step 1 · Create</p>
+        <h2 className="mt-2 text-2xl font-semibold tracking-tight">Create a payment request</h2>
         <p className="mt-2 text-sm leading-6 text-ink/55">
-          Add a clear product or service name and a stablecoin amount. A unique payment link is created after the backend validates and stores the invoice.
+          Name the thing you are charging for and set the exact amount in official testnet USD₮0. PortPay creates a unique link you can send to the buyer.
         </p>
       </div>
 
@@ -279,7 +283,7 @@ function InvoiceForm({
         <label className="block">
           <span className="text-sm font-semibold">Product or service name</span>
           <input
-            className="mt-2 w-full rounded-xl border border-ink/15 bg-cloud px-4 py-3 text-sm outline-none transition focus:border-ink/50"
+            className="mt-2 w-full rounded-xl border border-ink/15 bg-cloud px-4 py-3 text-sm outline-none transition focus:border-electric/70 focus:bg-white"
             value={title}
             onChange={(event) => setTitle(event.target.value)}
             placeholder="Harbor design consultation"
@@ -290,7 +294,7 @@ function InvoiceForm({
 
         <label className="block">
           <span className="text-sm font-semibold">Amount due in USD₮0</span>
-          <div className="mt-2 flex items-center rounded-xl border border-ink/15 bg-cloud focus-within:border-ink/50">
+            <div className="mt-2 flex items-center rounded-xl border border-ink/15 bg-cloud focus-within:border-electric/70 focus-within:bg-white">
             <input
               className="min-w-0 flex-1 bg-transparent px-4 py-3 text-sm outline-none"
               value={amountUsdt0}
@@ -308,7 +312,7 @@ function InvoiceForm({
 
         <button
           type="submit"
-          className="w-full rounded-xl bg-ink px-5 py-3 text-sm font-bold text-white transition hover:bg-ink/80 disabled:cursor-not-allowed disabled:opacity-40"
+          className="w-full rounded-xl bg-ink px-5 py-3.5 text-sm font-bold text-white shadow-sm transition hover:-translate-y-0.5 hover:bg-ink/85 hover:shadow-panel disabled:cursor-not-allowed disabled:opacity-40"
           disabled={!canCreate || isSubmitting}
         >
           {isSubmitting ? 'Saving invoice…' : 'Create invoice and payment link'}
@@ -324,6 +328,7 @@ function InvoiceForm({
 function InvoiceStatusPill({ status }: { status: Invoice['status'] }) {
   return (
     <span
+      aria-label={`Invoice status: ${invoiceStatusLabel(status)}`}
       className={`rounded-full px-3 py-1 text-xs font-bold ${
         status === 'paid' ? 'bg-mint text-ink' : 'bg-amber-100 text-amber-900'
       }`}
@@ -377,15 +382,15 @@ function PaymentHistoryPanel({
   }, [address, canRead, view]);
 
   return (
-    <section className="rounded-3xl border border-ink/10 bg-white p-6 shadow-sm sm:p-7">
+    <section id="history" className="portpay-appear rounded-3xl border border-ink/10 bg-paper p-6 shadow-panel sm:p-7">
       <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
         <div>
-          <p className="text-xs font-semibold uppercase tracking-[0.16em] text-ink/45">Smart Payment History</p>
+          <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-ink/45">Step 3 · History</p>
           <h2 className="mt-2 text-2xl font-semibold tracking-tight">
             {view === 'merchant' ? 'What this wallet received' : 'What this wallet spent'}
           </h2>
           <p className="mt-2 max-w-2xl text-sm leading-6 text-ink/55">
-            Confirmed payments only, loaded from persisted settlement evidence. Pending invoices never appear here.
+            Confirmed payments only. Every row is backed by persisted settlement evidence and links to the X Layer receipt.
           </p>
         </div>
         <div className="flex rounded-xl bg-cloud p-1 text-xs font-semibold">
@@ -425,10 +430,10 @@ function PaymentHistoryPanel({
             const explorerUrl = getExplorerTransactionUrl(payment.paymentTxHash);
             const evidenceComplete = hasVerifiedPaymentEvidence(payment);
             return (
-              <article key={payment.id} className="rounded-2xl border border-ink/10 bg-cloud/60 p-4 sm:p-5">
+              <article key={payment.id} className="group rounded-2xl border border-ink/10 bg-cloud/60 p-4 transition hover:border-ink/20 hover:bg-white sm:p-5">
                 <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                   <button type="button" className="text-left" onClick={() => onOpenInvoice(payment.id)}>
-                    <p className="font-semibold hover:underline hover:underline-offset-4">{payment.title}</p>
+                    <p className="font-semibold group-hover:underline group-hover:underline-offset-4">{payment.title}</p>
                     <p className="mt-1 text-xs text-ink/45">
                       Paid {formatPaymentTimestamp(payment.paidAt)} · Invoice {payment.id.slice(0, 8)}…
                     </p>
@@ -460,7 +465,7 @@ function PaymentHistoryPanel({
                   <span className="font-mono">{payment.paymentTxHash ? `${payment.paymentTxHash.slice(0, 10)}…${payment.paymentTxHash.slice(-8)}` : 'Transaction evidence unavailable'}</span>
                   {explorerUrl ? (
                     <a className="font-semibold text-ink underline underline-offset-4" href={explorerUrl} target="_blank" rel="noreferrer">
-                      View on X Layer Explorer
+                      Open receipt ↗
                     </a>
                   ) : (
                     <span>{evidenceComplete ? 'Explorer link unavailable' : 'Onchain evidence incomplete'}</span>
@@ -472,6 +477,43 @@ function PaymentHistoryPanel({
         </div>
       ) : null}
     </section>
+  );
+}
+
+function DemoJourney() {
+  const steps = [
+    { number: '01', title: 'Create', detail: 'Merchant sets a USD₮0 amount and shares one link.' },
+    { number: '02', title: 'Pay', detail: 'Buyer reviews a precise quote and confirms in OKX Wallet.' },
+    { number: '03', title: 'Confirm', detail: 'Both sides see the same verified X Layer receipt.' },
+  ];
+
+  return (
+    <aside id="two-tab-demo" className="portpay-appear rounded-[2rem] border border-white/10 bg-ink p-6 text-white shadow-soft sm:p-7">
+      <div className="flex items-center justify-between gap-4">
+        <div>
+          <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-mint/75">Two-tab demo</p>
+          <h2 className="mt-2 text-xl font-semibold tracking-tight">A clean handoff, end to end.</h2>
+        </div>
+        <span className="grid h-10 w-10 place-items-center rounded-2xl bg-mint text-lg font-bold text-ink">↗</span>
+      </div>
+      <div className="mt-7 space-y-5">
+        {steps.map((step, index) => (
+          <div key={step.number} className="flex gap-4">
+            <div className="flex flex-col items-center">
+              <span className="grid h-8 w-8 shrink-0 place-items-center rounded-full bg-white/10 font-mono text-[10px] font-bold text-mint">{step.number}</span>
+              {index < steps.length - 1 ? <span className="mt-2 h-full w-px bg-white/10" /> : null}
+            </div>
+            <div className={index < steps.length - 1 ? 'pb-1' : ''}>
+              <p className="font-semibold">{step.title}</p>
+              <p className="mt-1 text-sm leading-6 text-white/55">{step.detail}</p>
+            </div>
+          </div>
+        ))}
+      </div>
+      <div className="mt-7 rounded-2xl border border-mint/20 bg-mint/10 p-4 text-xs leading-5 text-white/65">
+        <span className="font-semibold text-mint">Testnet only.</span> DemoAAPL and DemoNVDA are ordinary demo assets, not real shares. Merchant settlement uses official X Layer Testnet USD₮0.
+      </div>
+    </aside>
   );
 }
 
@@ -522,54 +564,66 @@ function MerchantDashboard({ onOpenInvoice }: { onOpenInvoice: (invoiceId: strin
 
   return (
     <>
-      <section className="py-14 sm:py-16">
-        <div className="mb-5 inline-flex items-center gap-2 rounded-full bg-mint/70 px-3 py-1.5 text-sm font-semibold text-ink">
-          <span className="h-2 w-2 rounded-full bg-emerald-600" />
-          Phase 4 · Receipts + Smart Payment History
+      <section className="relative grid gap-10 overflow-hidden py-12 sm:py-16 lg:grid-cols-[1.1fr_0.9fr] lg:items-end lg:py-20">
+        <div className="portpay-grid pointer-events-none absolute inset-x-0 top-0 h-full opacity-50" />
+        <div className="relative">
+          <div className="mb-6 inline-flex items-center gap-2 rounded-full border border-ink/10 bg-white/75 px-3 py-1.5 text-[11px] font-bold uppercase tracking-[0.16em] text-ink/60 shadow-sm">
+            <span className="h-2 w-2 rounded-full bg-emerald-600" />
+            Merchant workspace · X Layer Testnet
+          </div>
+          <h1 className="max-w-3xl text-5xl font-semibold leading-[0.98] tracking-[-0.065em] sm:text-7xl">
+            Spend your portfolio.<br /><span className="text-ink/45">Get paid in stablecoins.</span>
+          </h1>
+          <p className="mt-7 max-w-2xl text-lg leading-8 text-ink/65">
+            PortPay turns a simple invoice into a clean two-sided payment flow: you request official testnet USD₮0, your customer pays from a demo portfolio, and the receipt reconciles onchain.
+          </p>
+          <div className="mt-8 flex flex-col gap-3 sm:flex-row sm:items-center">
+            <a href="#create-invoice" className="inline-flex items-center justify-center rounded-xl bg-ink px-5 py-3.5 text-sm font-bold text-white shadow-sm transition hover:-translate-y-0.5 hover:bg-ink/85 hover:shadow-panel">
+              Create an invoice <span className="ml-2 text-mint">↓</span>
+            </a>
+            <a href="#two-tab-demo" className="inline-flex items-center justify-center rounded-xl border border-ink/15 bg-white/60 px-5 py-3.5 text-sm font-semibold text-ink/70 transition hover:border-ink/35 hover:bg-white hover:text-ink">
+              See the demo path <span className="ml-2">↘</span>
+            </a>
+          </div>
         </div>
-        <h1 className="max-w-4xl text-5xl font-semibold leading-[1.04] tracking-[-0.06em] sm:text-7xl">
-          Turn a product into a shareable payment request.
-        </h1>
-        <p className="mt-7 max-w-2xl text-lg leading-8 text-ink/65">
-          Create a USD₮0-denominated invoice, share the link, and let a buyer settle it with the first PortPay demo asset.
-        </p>
+        <DemoJourney />
       </section>
 
       <WalletPanel />
 
       <section className="grid gap-4 py-8 sm:grid-cols-3">
-        <div className="rounded-3xl border border-ink/10 bg-white/75 p-5">
-          <p className="text-xs font-semibold uppercase tracking-[0.16em] text-ink/45">Invoices</p>
-          <p className="mt-2 text-3xl font-semibold">{invoices.length}</p>
-          <p className="mt-1 text-sm text-ink/55">Stored for this merchant wallet.</p>
+        <div className="portpay-appear rounded-3xl border border-ink/10 bg-paper p-5 shadow-panel">
+          <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-ink/45">All invoices</p>
+          <p className="mt-3 text-4xl font-semibold tracking-tight">{invoices.length}</p>
+          <p className="mt-2 text-sm text-ink/55">Stored for this merchant wallet.</p>
         </div>
-        <div className="rounded-3xl border border-ink/10 bg-white/75 p-5">
-          <p className="text-xs font-semibold uppercase tracking-[0.16em] text-ink/45">Waiting</p>
-          <p className="mt-2 text-3xl font-semibold">{pendingCount}</p>
-          <p className="mt-1 text-sm text-ink/55">Pending invoice records.</p>
+        <div className="portpay-appear rounded-3xl border border-ink/10 bg-paper p-5 shadow-panel">
+          <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-ink/45">Awaiting payment</p>
+          <p className="mt-3 text-4xl font-semibold tracking-tight">{pendingCount}</p>
+          <p className="mt-2 text-sm text-ink/55">Open requests waiting for a buyer.</p>
         </div>
-        <div className="rounded-3xl border border-ink/10 bg-white/75 p-5">
-          <p className="text-xs font-semibold uppercase tracking-[0.16em] text-ink/45">Received</p>
-          <p className="mt-2 text-3xl font-semibold">{paidCount}</p>
-          <p className="mt-1 text-sm text-ink/55">Paid records from later payment processing.</p>
+        <div className="portpay-appear rounded-3xl border border-ink/10 bg-ink p-5 text-white shadow-panel">
+          <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-mint/70">Payment received</p>
+          <p className="mt-3 text-4xl font-semibold tracking-tight">{paidCount}</p>
+          <p className="mt-2 text-sm text-white/55">Confirmed from settlement evidence.</p>
         </div>
       </section>
 
       <section className="grid gap-6 pb-8 lg:grid-cols-[0.9fr_1.1fr]">
         <InvoiceForm merchantAddress={address} canCreate={canCreate} onCreated={handleCreated} />
 
-        <section className="rounded-3xl border border-ink/10 bg-white p-6 shadow-sm sm:p-7">
+        <section className="portpay-appear rounded-3xl border border-ink/10 bg-paper p-6 shadow-panel sm:p-7">
           <div className="flex items-start justify-between gap-4">
             <div>
-              <p className="text-xs font-semibold uppercase tracking-[0.16em] text-ink/45">Recent invoices</p>
+              <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-ink/45">Step 2 · Monitor</p>
               <h2 className="mt-2 text-2xl font-semibold tracking-tight">Your payment requests</h2>
             </div>
             {isLoading ? <span className="text-xs text-ink/45">Loading…</span> : null}
           </div>
 
           {createdInvoice ? (
-            <div className="mt-6 rounded-2xl border border-emerald-200 bg-emerald-50 p-4">
-              <p className="text-xs font-semibold uppercase tracking-[0.14em] text-emerald-800">Link ready to share</p>
+              <div className="mt-6 rounded-2xl border border-emerald-200 bg-emerald-50 p-4 shadow-sm">
+              <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-emerald-800">Payment link ready</p>
               <p className="mt-2 font-semibold text-emerald-950">{createdInvoice.title}</p>
               <div className="mt-3 flex flex-col gap-3 sm:flex-row sm:items-center">
                 <code className="min-w-0 flex-1 break-all rounded-xl bg-white px-3 py-2 text-xs text-emerald-950">
@@ -582,7 +636,7 @@ function MerchantDashboard({ onOpenInvoice }: { onOpenInvoice: (invoiceId: strin
                 className="mt-3 text-sm font-semibold text-emerald-800 underline underline-offset-4"
                 onClick={() => onOpenInvoice(createdInvoice.id)}
               >
-                Open invoice detail
+                Open buyer preview ↗
               </button>
             </div>
           ) : null}
@@ -644,9 +698,7 @@ function displayAmount(value: string): string {
 }
 
 function paymentErrorMessage(error: unknown): string {
-  if (import.meta.env.DEV && error instanceof BuilderCodeVerificationError) {
-    return `${error.message} Diagnostics: ${JSON.stringify(error.diagnostics)}`;
-  }
+  if (error instanceof BuilderCodeVerificationError) return error.message;
   const message = error instanceof Error ? error.message : String(error);
   if (/reject|denied|user rejected|cancel/i.test(message)) return 'The wallet signature was rejected. No payment was completed.';
   if (/insufficient|balance/i.test(message)) return 'This wallet does not have enough selected demo asset or test OKB for the requested payment.';
@@ -965,21 +1017,28 @@ function BuyerWalletPanel({
 
   return (
     <section className="mt-10 border-t border-ink/10 pt-8">
-      <div className="flex flex-col gap-4 rounded-2xl bg-ink p-5 text-white sm:flex-row sm:items-center sm:justify-between">
+      <div className="relative overflow-hidden rounded-[1.75rem] bg-ink p-5 text-white shadow-soft sm:p-6">
+        <div className="portpay-grid pointer-events-none absolute inset-0 opacity-25" />
+        <div className="relative flex flex-col gap-5 sm:flex-row sm:items-end sm:justify-between">
         <div>
-          <p className="text-xs font-semibold uppercase tracking-[0.16em] text-mint/75">Buyer checkout</p>
-          <p className="mt-2 text-lg font-semibold">Pay with DemoAAPL or DemoNVDA on X Layer Testnet</p>
-          <p className="mt-1 text-sm leading-6 text-white/55">Demo assets only · not backed by real Apple or NVIDIA shares.</p>
+          <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-mint/75">Buyer checkout</p>
+          <p className="mt-2 text-2xl font-semibold tracking-tight">Choose how to pay</p>
+          <p className="mt-2 max-w-xl text-sm leading-6 text-white/55">Review the quote, select a demo portfolio asset, and confirm both wallet steps when you are ready.</p>
         </div>
-        <span className="w-fit rounded-full bg-mint px-3 py-1 text-xs font-bold text-ink">CHAIN 1952</span>
+        <span className="w-fit shrink-0 rounded-full bg-mint px-3 py-1.5 text-[10px] font-bold uppercase tracking-[0.14em] text-ink">Chain 1952</span>
+        </div>
+        <div className="relative mt-6 grid grid-cols-3 gap-2 border-t border-white/10 pt-4 text-[10px] font-semibold uppercase tracking-[0.12em] text-white/45">
+          <span className="text-mint">1 · Connect</span><span>2 · Review</span><span>3 · Confirm</span>
+        </div>
       </div>
 
       {!isConnected ? (
-        <div className="mt-5 rounded-2xl border border-ink/10 bg-cloud p-5">
-          <p className="text-sm leading-6 text-ink/60">Connect the buyer wallet to receive a signed quote for this invoice.</p>
+        <div className="mt-5 rounded-2xl border border-ink/10 bg-paper p-6 shadow-panel">
+          <p className="text-sm font-semibold">Connect to see your payment quote</p>
+          <p className="mt-2 max-w-xl text-sm leading-6 text-ink/55">PortPay will read your DemoAAPL and DemoNVDA balances, then show the exact asset amount required for this invoice.</p>
           <button
             type="button"
-            className="mt-4 rounded-xl bg-ink px-5 py-3 text-sm font-bold text-white transition hover:bg-ink/80 disabled:cursor-wait disabled:opacity-60"
+            className="mt-5 rounded-xl bg-ink px-5 py-3.5 text-sm font-bold text-white shadow-sm transition hover:-translate-y-0.5 hover:bg-ink/85 hover:shadow-panel disabled:cursor-wait disabled:opacity-60"
             onClick={() => connect({ connector: okxWalletConnector })}
             disabled={isConnecting}
           >
@@ -1003,37 +1062,38 @@ function BuyerWalletPanel({
         </div>
       ) : (
         <>
-          <div className="mt-5 flex flex-col gap-3 rounded-2xl border border-ink/10 bg-cloud p-5 sm:flex-row sm:items-center sm:justify-between">
+        <div className="mt-5 flex flex-col gap-4 rounded-2xl border border-ink/10 bg-paper p-5 shadow-panel sm:flex-row sm:items-center sm:justify-between">
             <div>
-              <p className="text-sm font-semibold text-ink">Buyer wallet connected</p>
+              <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-emerald-700">Wallet connected</p>
+              <p className="mt-1 text-sm font-semibold text-ink">Buyer wallet ready</p>
               <p className="mt-1 font-mono text-xs text-ink/55">{shortenAddress(address!)}</p>
             </div>
             <div className="grid gap-1 text-sm text-ink/55 sm:text-right">
-              <span>DemoAAPL: {formattedAaplBalance ?? (isBalanceLoading ? 'reading…' : '—')}</span>
-              <span>DemoNVDA: {formattedNvdaBalance ?? (isBalanceLoading ? 'reading…' : '—')}</span>
+              <span><strong className="text-ink">DemoAAPL</strong> {formattedAaplBalance ?? (isBalanceLoading ? 'reading…' : '—')}</span>
+              <span><strong className="text-ink">DemoNVDA</strong> {formattedNvdaBalance ?? (isBalanceLoading ? 'reading…' : '—')}</span>
             </div>
           </div>
 
-          <section className="mt-5 rounded-2xl border border-violet-200 bg-violet-50 p-5">
+          <section className="mt-5 rounded-2xl border border-[#ead9b8] bg-[#fff9eb] p-5 shadow-sm">
             <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
               <div>
-                <p className="text-xs font-semibold uppercase tracking-[0.16em] text-violet-800">Smart Spend</p>
-                <h3 className="mt-2 text-xl font-semibold tracking-tight text-violet-950">Portfolio-aware asset suggestion</h3>
-                <p className="mt-2 text-sm leading-6 text-violet-950/65">Deterministic demo allocation aid, not financial advice. It never submits a payment automatically.</p>
+                <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[#8a642b]">Smart Spend · optional</p>
+                <h3 className="mt-2 text-xl font-semibold tracking-tight text-[#3d2c15]">A clearer way to choose your asset</h3>
+                <p className="mt-2 text-sm leading-6 text-[#6d5837]">A deterministic demo allocation aid — never financial advice and never an automatic payment.</p>
               </div>
-              <span className="w-fit rounded-full bg-white px-3 py-1 text-xs font-bold text-violet-900">DEMO RULES</span>
+              <span className="w-fit rounded-full bg-white px-3 py-1 text-[10px] font-bold uppercase tracking-[0.12em] text-[#8a642b]">Demo rules</span>
             </div>
             <div className="mt-5 grid gap-3 sm:grid-cols-2">
               {(['demoAapl', 'demoNvda'] as const).map((assetKey) => {
                 const allocation = smartSpendRecommendation.allocations.find((item) => item.key === assetKey);
                 return (
-                  <div key={assetKey} className="rounded-xl bg-white/80 p-4">
+                  <div key={assetKey} className="rounded-xl border border-[#ead9b8] bg-white/75 p-4">
                     <div className="flex items-center justify-between gap-3">
-                      <span className="font-semibold text-violet-950">{portfolioAssets[assetKey].label}</span>
-                      <label className="text-xs text-violet-950/60">
+                      <span className="font-semibold text-[#3d2c15]">{portfolioAssets[assetKey].label}</span>
+                      <label className="text-xs text-[#6d5837]">
                         Target %
                         <input
-                          className="ml-2 w-16 rounded-lg border border-violet-200 bg-white px-2 py-1 text-right text-xs text-violet-950 outline-none focus:border-violet-500"
+                          className="ml-2 w-16 rounded-lg border border-[#ead9b8] bg-white px-2 py-1 text-right text-xs text-[#3d2c15] outline-none focus:border-[#8a642b]"
                           type="number"
                           min="0"
                           max="100"
@@ -1044,7 +1104,7 @@ function BuyerWalletPanel({
                         />
                       </label>
                     </div>
-                    <p className="mt-3 text-xs text-violet-950/60">
+                    <p className="mt-3 text-xs text-[#6d5837]">
                       Current: {allocation ? formatAllocationPercent(allocation.currentAllocationBps) : '—'} · Target: {targetAllocation[assetKey] / 100}%
                     </p>
                   </div>
@@ -1054,10 +1114,10 @@ function BuyerWalletPanel({
             {targetAllocation.demoAapl + targetAllocation.demoNvda !== 10_000 ? (
               <p className="mt-4 rounded-xl bg-amber-100 px-3 py-2 text-xs font-semibold text-amber-900">Target allocations must add up to 100%.</p>
             ) : null}
-            <div className="mt-4 rounded-xl border border-violet-200 bg-white/70 p-4">
-              <p className="text-sm font-semibold text-violet-950">{smartSpendRecommendation.reason}</p>
+            <div className="mt-4 rounded-xl border border-[#ead9b8] bg-white/70 p-4">
+              <p className="text-sm font-semibold text-[#3d2c15]">{smartSpendRecommendation.reason}</p>
               {smartSpendRecommendation.allocations.length > 0 ? (
-                <p className="mt-2 text-xs leading-5 text-violet-950/60">
+                <p className="mt-2 text-xs leading-5 text-[#6d5837]">
                   Coverage check uses the quoted demo reference prices and token decimals; an asset is eligible only when its balance can cover the full invoice.
                 </p>
               ) : null}
@@ -1065,7 +1125,7 @@ function BuyerWalletPanel({
             <div className="mt-4 flex flex-wrap gap-2">
               <button
                 type="button"
-                className={`rounded-xl px-3 py-2 text-xs font-bold transition ${smartSpendApplied ? 'bg-violet-900 text-white' : 'bg-white text-violet-900 hover:bg-violet-100'}`}
+                className={`rounded-xl px-3 py-2 text-xs font-bold transition ${smartSpendApplied ? 'bg-[#3d2c15] text-white' : 'bg-white text-[#6d4d1b] hover:bg-[#f8edcf]'}`}
                 onClick={applySmartSpend}
                 disabled={isBusy || !smartSpendRecommendation.assetKey}
               >
@@ -1085,24 +1145,24 @@ function BuyerWalletPanel({
             </div>
           </section>
 
-          <div className="mt-5 rounded-2xl border border-ink/10 bg-mint/35 p-5">
+          <div className="mt-5 rounded-2xl border border-mint/80 bg-mint/30 p-5 shadow-sm">
             <div className="flex flex-wrap items-center justify-between gap-3">
-              <p className="text-xs font-semibold uppercase tracking-[0.16em] text-ink/50">Exact payment quote</p>
-              {quote ? <span className="text-xs font-semibold text-ink/50">Valid until {new Date(quote.expiresAt).toLocaleTimeString()}</span> : null}
+              <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-ink/55">Your exact payment quote</p>
+              {quote ? <span className="rounded-full bg-white/75 px-3 py-1 text-xs font-semibold text-ink/55">Valid until {new Date(quote.expiresAt).toLocaleTimeString()}</span> : null}
             </div>
             {quoteLoading ? (
-              <p className="mt-5 text-sm font-semibold text-ink/55">Preparing a short-lived quote…</p>
+              <div className="mt-5 rounded-xl bg-white/70 p-4 text-sm font-semibold text-ink/55">Preparing a short-lived quote…</div>
             ) : quote ? (
               <div className="mt-5 grid gap-3 sm:grid-cols-2">
-                <div className="rounded-xl bg-white/80 p-4">
+                <div className="rounded-xl border border-white/80 bg-white/80 p-4">
                   <p className="text-xs font-semibold uppercase tracking-[0.14em] text-ink/45">You spend</p>
-                  <p className="mt-2 text-2xl font-semibold">{displayAmount(quote.assetAmount)} <span className="text-sm text-ink/50">{portfolioAssets[quote.assetKey].label}</span></p>
+                  <p className="mt-2 text-3xl font-semibold tracking-tight">{displayAmount(quote.assetAmount)} <span className="text-sm text-ink/50">{portfolioAssets[quote.assetKey].label}</span></p>
                 </div>
-                <div className="rounded-xl bg-white/80 p-4">
+                <div className="rounded-xl border border-white/80 bg-white/80 p-4">
                   <p className="text-xs font-semibold uppercase tracking-[0.14em] text-ink/45">Merchant receives</p>
-                  <p className="mt-2 text-2xl font-semibold">{displayAmount(quote.stablecoinAmount)} <span className="text-sm text-ink/50">USD₮0</span></p>
+                  <p className="mt-2 text-3xl font-semibold tracking-tight">{displayAmount(quote.stablecoinAmount)} <span className="text-sm text-ink/50">USD₮0</span></p>
                 </div>
-                <p className="sm:col-span-2 text-xs leading-5 text-ink/55">Demo reference price: {quote.referencePriceUsd} USD per {portfolioAssets[quote.assetKey].label} · token decimals read: {quote.assetDecimals}/{quote.stablecoinDecimals}. No oracle or live market price is used.</p>
+                <p className="sm:col-span-2 text-xs leading-5 text-ink/55">Demo reference price: {quote.referencePriceUsd} USD per {portfolioAssets[quote.assetKey].label}. Token decimals read: {quote.assetDecimals}/{quote.stablecoinDecimals}. No oracle or live market price is used.</p>
               </div>
             ) : (
               <p className="mt-5 text-sm leading-6 text-ink/55">A quote will appear after the backend and deployed testnet contracts are configured.</p>
@@ -1116,7 +1176,7 @@ function BuyerWalletPanel({
           <div className="mt-5 flex flex-col gap-3 sm:flex-row sm:items-center">
             <button
               type="button"
-              className="rounded-xl bg-ink px-5 py-3 text-sm font-bold text-white transition hover:bg-ink/80 disabled:cursor-not-allowed disabled:opacity-40"
+              className="order-1 rounded-xl bg-ink px-5 py-3.5 text-sm font-bold text-white shadow-sm transition hover:-translate-y-0.5 hover:bg-ink/85 hover:shadow-panel disabled:cursor-not-allowed disabled:opacity-40 sm:order-none"
               onClick={payInvoice}
               disabled={isBusy || Boolean(confirmedPaymentHash) || !quote || !hasEnoughSelectedAsset || isBalanceLoading}
             >
@@ -1124,7 +1184,7 @@ function BuyerWalletPanel({
             </button>
             <button
               type="button"
-              className="rounded-xl border border-ink/15 px-4 py-3 text-sm font-semibold text-ink/70 transition hover:border-ink/40 hover:text-ink disabled:cursor-wait disabled:opacity-50"
+              className="order-2 rounded-xl border border-ink/15 px-4 py-3.5 text-sm font-semibold text-ink/70 transition hover:border-ink/40 hover:bg-white hover:text-ink disabled:cursor-wait disabled:opacity-50 sm:order-none"
               onClick={() => void refreshQuote()}
               disabled={isBusy || quoteLoading}
             >
@@ -1141,7 +1201,7 @@ function BuyerWalletPanel({
               Check submitted transaction and reconcile
             </button>
           ) : null}
-          {paymentStep === 'paid' ? <p className="mt-4 text-sm font-semibold text-emerald-700">Confirmed on X Layer Testnet. The invoice status is now paid from verified settlement evidence.</p> : null}
+          {paymentStep === 'paid' ? <p className="mt-4 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm font-semibold text-emerald-800">✓ Confirmed on X Layer Testnet. The invoice is now paid from verified settlement evidence.</p> : null}
         </>
       )}
     </section>
@@ -1191,10 +1251,10 @@ function InvoiceDetailPage({ invoiceId, onBack }: { invoiceId: string; onBack: (
   }, [invoiceId]);
 
   return (
-    <section className="flex flex-1 items-center justify-center py-16">
-      <div className="w-full max-w-2xl rounded-[2rem] border border-ink/10 bg-white p-7 shadow-soft sm:p-10">
-        <button type="button" className="text-sm font-semibold text-ink/55 hover:text-ink" onClick={onBack}>
-          ← Back to merchant dashboard
+    <section className="portpay-appear flex flex-1 items-center justify-center py-10 sm:py-16">
+      <div className="w-full max-w-3xl rounded-[2rem] border border-ink/10 bg-paper p-6 shadow-soft sm:p-10">
+        <button type="button" className="text-sm font-semibold text-ink/50 transition hover:text-ink" onClick={onBack}>
+          ← Back to merchant workspace
         </button>
 
         {isLoading ? (
@@ -1208,22 +1268,33 @@ function InvoiceDetailPage({ invoiceId, onBack }: { invoiceId: string; onBack: (
             <p className="mx-auto mt-4 max-w-md text-sm leading-6 text-ink/55">{error}</p>
           </div>
         ) : invoice ? (
-          <div className="pt-12">
+          <div className="pt-10">
             <div className="flex flex-wrap items-center justify-between gap-3">
-              <p className="text-xs font-semibold uppercase tracking-[0.16em] text-ink/45">PortPay checkout</p>
+              <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-ink/45">PortPay checkout · Step 2 of 3</p>
               <InvoiceStatusPill status={invoice.status} />
             </div>
-            <h1 className="mt-4 text-4xl font-semibold tracking-tight">{invoice.title}</h1>
-            <p className="mt-5 text-5xl font-semibold tracking-tight">
-              {invoice.amountUsdt0} <span className="text-xl text-ink/50">USD₮0</span>
-            </p>
+            <div className="mt-7 grid gap-6 lg:grid-cols-[1fr_auto] lg:items-end">
+              <div>
+                <p className="text-sm font-semibold text-ink/45">You are paying</p>
+                <h1 className="mt-2 text-4xl font-semibold tracking-tight sm:text-5xl">{invoice.title}</h1>
+              </div>
+              <div className="rounded-2xl bg-ink px-5 py-4 text-white lg:min-w-56 lg:text-right">
+                <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-white/50">Amount due</p>
+                <p className="mt-1 text-3xl font-semibold tracking-tight">{invoice.amountUsdt0} <span className="text-base text-mint">USD₮0</span></p>
+              </div>
+            </div>
 
-            <div className="mt-10 rounded-2xl bg-cloud p-5">
-              <p className="text-sm font-semibold">{invoiceStatusLabel(invoice.status)}</p>
+            <div className={`mt-8 rounded-2xl p-5 ${invoice.status === 'paid' ? 'border border-emerald-200 bg-emerald-50' : 'border border-ink/10 bg-cloud'}`}>
+              <div className="flex items-center gap-3">
+                <span className={`grid h-8 w-8 place-items-center rounded-full text-sm font-bold ${invoice.status === 'paid' ? 'bg-emerald-600 text-white' : 'bg-amber-200 text-amber-950'}`}>
+                  {invoice.status === 'paid' ? '✓' : '…'}
+                </span>
+                <p className="text-sm font-semibold">{invoiceStatusLabel(invoice.status)}</p>
+              </div>
               <p className="mt-2 text-sm leading-6 text-ink/55">
                 {invoice.status === 'paid'
                   ? 'This status is read from a confirmed PortPay settlement event on X Layer Testnet.'
-                  : 'Review the exact quote below, then approve the selected demo asset and confirm the settlement in OKX Wallet.'}
+                  : 'Review the exact quote below, then approve the selected demo asset and confirm payment in OKX Wallet.'}
               </p>
             </div>
 
@@ -1233,7 +1304,7 @@ function InvoiceDetailPage({ invoiceId, onBack }: { invoiceId: string; onBack: (
               <PaymentReceipt invoice={invoice} />
             ) : null}
 
-            <dl className="mt-8 space-y-4 border-t border-ink/10 pt-6 text-sm">
+            <dl className="mt-8 grid gap-4 border-t border-ink/10 pt-6 text-sm sm:grid-cols-2">
               <div className="flex justify-between gap-4">
                 <dt className="text-ink/45">Merchant wallet</dt>
                 <dd className="font-mono">{shortenAddress(invoice.merchantAddress)}</dd>
@@ -1247,6 +1318,7 @@ function InvoiceDetailPage({ invoiceId, onBack }: { invoiceId: string; onBack: (
                 <dd className="max-w-[16rem] break-all text-right font-mono text-xs">{invoice.id}</dd>
               </div>
             </dl>
+            <p className="mt-6 text-center text-xs leading-5 text-ink/40">Testnet demonstration · Demo portfolio assets are not backed by real shares.</p>
           </div>
         ) : null}
       </div>
@@ -1259,17 +1331,28 @@ function PaymentReceipt({ invoice }: { invoice: Invoice }) {
   const evidenceComplete = hasVerifiedPaymentEvidence(invoice);
 
   return (
-    <section className="mt-8 rounded-2xl border border-emerald-200 bg-emerald-50 p-5 sm:p-6">
+    <section className="mt-8 rounded-[1.75rem] border border-emerald-200 bg-emerald-50 p-5 shadow-panel sm:p-7">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <p className="text-xs font-semibold uppercase tracking-[0.14em] text-emerald-800">Payment receipt</p>
-          <h2 className="mt-2 text-2xl font-semibold tracking-tight text-emerald-950">Settlement confirmed</h2>
+          <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-emerald-800">Step 3 · Receipt</p>
+          <h2 className="mt-2 text-3xl font-semibold tracking-tight text-emerald-950">Payment received</h2>
         </div>
         <InvoiceStatusPill status={invoice.status} />
       </div>
 
-      <p className="mt-4 text-sm leading-6 text-emerald-950">
-        This receipt is built from the confirmed settlement evidence persisted by PortPay. It is not a market-price statement or a DEX swap receipt.
+      <div className="mt-6 flex flex-col gap-4 rounded-2xl bg-white/65 p-4 sm:flex-row sm:items-center sm:justify-between sm:p-5">
+        <div>
+          <p className="text-xs font-semibold uppercase tracking-[0.14em] text-emerald-900/55">Merchant received</p>
+          <p className="mt-1 text-3xl font-semibold tracking-tight text-emerald-950">{formatReceivedAmount(invoice)}</p>
+        </div>
+        <div className="sm:text-right">
+          <p className="text-xs font-semibold uppercase tracking-[0.14em] text-emerald-900/55">Buyer spent</p>
+          <p className="mt-1 text-lg font-semibold text-emerald-950">{formatSpentAmount(invoice)}</p>
+        </div>
+      </div>
+
+      <p className="mt-5 text-sm leading-6 text-emerald-950">
+        Confirmed from the canonical PortPay settlement receipt on X Layer Testnet. This is a portfolio settlement, not a DEX swap or market-price statement.
       </p>
 
       <dl className="mt-6 grid gap-x-6 gap-y-4 border-t border-emerald-900/10 pt-5 text-sm sm:grid-cols-2">
@@ -1318,8 +1401,8 @@ function PaymentReceipt({ invoice }: { invoice: Invoice }) {
           <p className="mt-1 text-emerald-950">Transaction evidence unavailable.</p>
         )}
         {explorerUrl ? (
-          <a className="mt-3 inline-block font-semibold text-emerald-800 underline underline-offset-4" href={explorerUrl} target="_blank" rel="noreferrer">
-            View confirmed transaction on X Layer Explorer
+          <a className="mt-3 inline-flex items-center rounded-xl bg-emerald-900 px-4 py-2.5 font-semibold text-white transition hover:-translate-y-0.5 hover:bg-emerald-950" href={explorerUrl} target="_blank" rel="noreferrer">
+            View on X Layer Explorer <span className="ml-2 text-mint">↗</span>
           </a>
         ) : null}
         {!evidenceComplete ? (
@@ -1346,23 +1429,26 @@ function PaymentReceipt({ invoice }: { invoice: Invoice }) {
 
 function AppShell({ children }: { children: React.ReactNode }) {
   return (
-    <main className="min-h-screen overflow-hidden bg-cloud text-ink">
-      <div className="mx-auto flex min-h-screen max-w-6xl flex-col px-6 py-6 sm:px-10 lg:px-12">
-        <header className="flex items-center justify-between">
+    <main className="portpay-shell min-h-screen overflow-hidden bg-cloud text-ink">
+      <div className="mx-auto flex min-h-screen max-w-6xl flex-col px-5 py-5 sm:px-8 sm:py-7 lg:px-12">
+        <header className="flex items-center justify-between border-b border-ink/10 pb-5">
           <div className="flex items-center gap-3">
-            <span className="grid h-10 w-10 place-items-center rounded-2xl bg-ink text-lg font-bold text-mint">P</span>
-            <span className="text-lg font-semibold tracking-tight">PortPay</span>
+            <span className="grid h-10 w-10 place-items-center rounded-2xl bg-ink text-lg font-bold text-mint shadow-sm">P</span>
+            <div>
+              <span className="block text-lg font-semibold tracking-tight">PortPay</span>
+              <span className="hidden text-[10px] font-semibold uppercase tracking-[0.16em] text-ink/40 sm:block">Portfolio payments, simplified</span>
+            </div>
           </div>
-          <span className="rounded-full border border-ink/10 bg-white/70 px-4 py-2 text-xs font-semibold uppercase tracking-[0.18em] text-ink/60">
-            Merchant + buyer settlement
+          <span className="shrink-0 rounded-full border border-ink/10 bg-white/70 px-3 py-2 text-[10px] font-bold uppercase tracking-[0.16em] text-ink/60 sm:px-4">
+            <span className="hidden sm:inline">X Layer Testnet · </span>1952
           </span>
         </header>
 
         {children}
 
-        <footer className="flex flex-col gap-2 border-t border-ink/10 py-5 text-sm text-ink/45 sm:flex-row sm:items-center sm:justify-between">
-          <span>PortPay · X Layer Testnet</span>
-          <span>Phase 5 Smart Spend · DemoAAPL + DemoNVDA test assets.</span>
+        <footer className="flex flex-col gap-2 border-t border-ink/10 py-6 text-xs leading-5 text-ink/45 sm:flex-row sm:items-center sm:justify-between">
+          <span>PortPay · testnet portfolio settlement</span>
+          <span>DemoAAPL + DemoNVDA are demo assets, not real shares.</span>
         </footer>
       </div>
     </main>

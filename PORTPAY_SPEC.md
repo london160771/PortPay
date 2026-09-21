@@ -1,7 +1,7 @@
 # PortPay — Source-of-Truth Product and Technical Specification
 
 **Status:** Baseline source of truth  
-**Last updated:** 2026-09-17  
+**Last updated:** 2026-09-21
 **Repository:** <https://github.com/london160771/PortPay>  
 **Builder Kit reference:** <https://www.okx.com/learn/okx-dev-day-builder-kit>
 
@@ -382,6 +382,8 @@ Current implementation note (2026-09-21): the frontend uses `ox/erc8021` with `v
 - Make Testnet/demo labels and limitations impossible to miss.
 - Update README and both source-of-truth documents for any material changes.
 - Prepare the reproducible two-tab judge demo and submission evidence.
+
+Current implementation note (2026-09-21): the product surfaces now present a three-step merchant/buyer journey, prioritize amount-due and exact-quote clarity, keep Smart Spend visibly optional, lead receipts with confirmed payment and explorer evidence, and isolate development-only Builder Code diagnostics from normal buyer errors. These changes are presentation-only; settlement, quote validation, Smart Spend math, history persistence, and Builder Code attachment remain unchanged.
 
 **Mandatory GPT-5.6 Sol High review checkpoint:** before final submission and before any mainnet test. Review the complete implementation, contracts, Builder Codes, documentation, security assumptions, demo claims, and known limitations.
 

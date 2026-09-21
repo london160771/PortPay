@@ -5,9 +5,10 @@
 :root {
   font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   color: #09111f;
-  background: #f4f7fb;
+  background: #eef3f5;
   font-synthesis: none;
   text-rendering: optimizeLegibility;
+  font-smoothing: antialiased;
 }
 
 * {
@@ -17,4 +18,60 @@
 body {
   margin: 0;
   min-width: 320px;
+  background:
+    radial-gradient(circle at 12% -10%, rgba(186, 243, 210, 0.62), transparent 30rem),
+    radial-gradient(circle at 92% 0%, rgba(92, 124, 250, 0.08), transparent 24rem),
+    #eef3f5;
+}
+
+button,
+a,
+input {
+  -webkit-tap-highlight-color: transparent;
+}
+
+button:focus-visible,
+a:focus-visible,
+input:focus-visible {
+  outline: 3px solid rgba(92, 124, 250, 0.45);
+  outline-offset: 3px;
+}
+
+::selection {
+  background: #baf3d2;
+  color: #09111f;
+}
+
+.portpay-shell {
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.52), rgba(255, 255, 255, 0) 18rem),
+    transparent;
+}
+
+.portpay-grid {
+  background-image: linear-gradient(rgba(9, 17, 31, 0.035) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(9, 17, 31, 0.035) 1px, transparent 1px);
+  background-size: 32px 32px;
+  mask-image: linear-gradient(to bottom, black, transparent 90%);
+}
+
+.portpay-appear {
+  animation: portpay-appear 480ms ease-out both;
+}
+
+@keyframes portpay-appear {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .portpay-appear {
+    animation: none;
+  }
 }
