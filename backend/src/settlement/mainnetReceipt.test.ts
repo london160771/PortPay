@@ -33,7 +33,7 @@ function token(address: string, symbol: string): OkxQuoteData['fromToken'] {
 }
 function quoteData(): OkxQuoteData {
   const fromToken = token(asset, 'wAAPLx'); const toToken = token(stablecoin, 'USD₮0');
-  return { chainIndex: '196', dexRouterList: [{ fromToken, toToken, dexProtocol: { dexName: 'Uniswap V3', percent: '100' } }], estimateGasFee: '338400', fromToken, fromTokenAmount: inputAmount, priceImpactPercent: '-0.12', quoteId: 'quote-1', router: `${asset}--0x4ae46a509f6b1d9056937ba4500cb143933d2dc8--${stablecoin}`, swapMode: 'exactIn', toToken, toTokenAmount: '1001000', tradeFee: '0.0006' };
+  return { chainIndex: '196', dexRouterList: [{ fromToken, toToken, dexProtocol: { dexName: 'Uniswap V3', percent: '100' } }], estimateGasFee: '338400', fromToken, fromTokenAmount: inputAmount, priceImpactPercent: '-0.12', quoteId: 'quote-1', router: `${asset}--${stablecoin}`, swapMode: 'exactIn', toToken, toTokenAmount: '1001000', tradeFee: '0.0006' };
 }
 function approval(): OkxApprovalData {
   return { data: encodeFunctionData({ abi: approveAbi, functionName: 'approve', args: [spender, BigInt(inputAmount)] }), dexContractAddress: spender, gasLimit: '70000', gasPrice: '27000001' };
@@ -110,6 +110,10 @@ describe('mainnet receipt/reconciliation verification', () => {
     expect(result.builderCodeCheck.code).toBe(builderCode);
     expect(Attribution.fromData(value.evidence.attributedApprovalCalldata)?.codes).toEqual([builderCode]);
     expect(Attribution.fromData(value.evidence.attributedSwapCalldata)?.codes).toEqual([builderCode]);
+    expect(value.evidence.minimumReceive).toBe(value.setup.swap.execution?.minimumReceiveAmount);
+    expect(value.evidence.expectedOutput).toBe(value.setup.swap.execution?.expectedOutputAmount);
+    expect(value.evidence.routeFingerprint).toBe(value.setup.swap.execution?.routeFingerprint);
+    expect(value.evidence.preparationHash).toBe(value.setup.swap.execution?.preparationHash);
     expect(result.balanceEvidence).toMatchObject({ beforeBlockNumber: '99', receiptBlockNumber: '100', buyerInputDelta: inputAmount, merchantOutputDelta: '1000000' });
     expect(requestedBlocks).toEqual([99n, 100n, 99n, 100n]);
     await expect(verifyMainnetReceipt({ ...value.common, publicClient: receiptClient(value.logs) })).rejects.toMatchObject({ code: 'DUPLICATE_SETTLEMENT' });
@@ -128,6 +132,41 @@ describe('mainnet receipt/reconciliation verification', () => {
       claimSettlement: value.repository.claimSettlement.bind(value.repository),
     };
     await expect(verifyMainnetReceipt({ ...value.common, repository: corruptedRepository, publicClient: receiptClient(value.logs) })).rejects.toMatchObject({ code: 'INVALID_PREPARATION' });
+  });
+
+  it('rejects persisted authenticated-response or approval-binding tampering', async () => {
+    const value = await fixture();
+    const execution = value.evidence.swap.execution!;
+    const tamperedResponse = {
+      ...value.evidence,
+      swap: {
+        ...value.evidence.swap,
+        execution: {
+          ...execution,
+          authenticatedResponse: {
+            ...execution.authenticatedResponse,
+            tx: { ...execution.authenticatedResponse.tx, data: `${execution.authenticatedResponse.tx.data}00` as Hex },
+          },
+        },
+      },
+    };
+    const tamperedRepository = {
+      getPreparation: async () => tamperedResponse,
+      savePreparation: value.repository.savePreparation.bind(value.repository),
+      claimSettlement: value.repository.claimSettlement.bind(value.repository),
+    };
+    await expect(verifyMainnetReceipt({ ...value.common, repository: tamperedRepository, publicClient: receiptClient(value.logs) })).rejects.toMatchObject({ code: 'INVALID_PREPARATION' });
+
+    const tamperedApprovalBinding = {
+      ...value.evidence,
+      swap: { ...value.evidence.swap, execution: { ...execution, spender: merchant } },
+    };
+    const approvalRepository = {
+      getPreparation: async () => tamperedApprovalBinding,
+      savePreparation: value.repository.savePreparation.bind(value.repository),
+      claimSettlement: value.repository.claimSettlement.bind(value.repository),
+    };
+    await expect(verifyMainnetReceipt({ ...value.common, repository: approvalRepository, publicClient: receiptClient(value.logs) })).rejects.toMatchObject({ code: 'INVALID_PREPARATION' });
   });
 
   it('rejects malformed balance RPC values and mismatched before/after deltas', async () => {

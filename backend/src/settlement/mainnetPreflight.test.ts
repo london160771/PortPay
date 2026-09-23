@@ -27,7 +27,7 @@ function token(address: string, symbol: string, decimal: string): OkxQuoteData['
 function quoteData(): OkxQuoteData {
   const fromToken = token(mainnetAddressConfig.wAapl, 'wAAPLx', '18');
   const toToken = token(mainnetAddressConfig.usdt0, 'USD₮0', '6');
-  return { chainIndex: '196', dexRouterList: [{ fromToken, toToken, dexProtocol: { dexName: 'Uniswap V3', percent: '100' } }], estimateGasFee: '338400', fromToken, fromTokenAmount: amount, priceImpactPercent: '-0.12', quoteId: 'quote-1', router: `${mainnetAddressConfig.wAapl}--0x4ae46a509f6b1d9056937ba4500cb143933d2dc8--${mainnetAddressConfig.usdt0}`, swapMode: 'exactIn', toToken, toTokenAmount: '1001000', tradeFee: '0.0006' };
+  return { chainIndex: '196', dexRouterList: [{ fromToken, toToken, dexProtocol: { dexName: 'Uniswap V3', percent: '100' } }], estimateGasFee: '338400', fromToken, fromTokenAmount: amount, priceImpactPercent: '-0.12', quoteId: 'quote-1', router: `${mainnetAddressConfig.wAapl}--${mainnetAddressConfig.usdt0}`, swapMode: 'exactIn', toToken, toTokenAmount: '1001000', tradeFee: '0.0006' };
 }
 function approval(): OkxApprovalData {
   return { data: encodeFunctionData({ abi: approveAbi, functionName: 'approve', args: [spender, BigInt(amount)] }), dexContractAddress: spender, gasLimit: '70000', gasPrice: '27000001' };
@@ -37,8 +37,13 @@ function swap(): OkxSwapData {
   const data = encodeFunctionData({ abi: swapAbi, functionName: 'dagSwapTo', args: [1n, merchant, { fromToken: BigInt(mainnetAddressConfig.wAapl), toToken: mainnetAddressConfig.usdt0 as Address, fromTokenAmount: BigInt(amount), minReturnAmount: 1_000_000n, deadLine: 1_790_000_000n }, [{ mixAdapters: [merchant], assetTo: [mainnetAddressConfig.usdt0 as Address], rawData: [1n], extraData: ['0x'], fromToken: BigInt(mainnetAddressConfig.wAapl) }]] });
   return { routerResult: quote, tx: { data, from: buyer, gas: '338400', gasPrice: '27000001', minReceiveAmount: '1000000', slippagePercent: '0.5', to: router, value: '0' } };
 }
-class FakeApi { async getQuote() { return quoteData(); } async getApprovalTransaction() { return approval(); } async getSwapTransaction() { return swap(); } }
-function adapter() { return new OKXDEXMainnetAdapter({ apiClient: new FakeApi() as unknown as OkxDexApiClient, builderCode: 'mainnetcode12345', now: () => new Date('2026-09-21T00:00:00.000Z') }); }
+class FakeApi {
+  swapCalls = 0;
+  async getQuote() { return quoteData(); }
+  async getApprovalTransaction() { return approval(); }
+  async getSwapTransaction() { this.swapCalls += 1; return swap(); }
+}
+function adapter(fake = new FakeApi()) { return { current: new OKXDEXMainnetAdapter({ apiClient: fake as unknown as OkxDexApiClient, builderCode: 'mainnetcode12345', now: () => new Date('2026-09-21T00:00:00.000Z') }), fake }; }
 type ClientOptions = { chainId?: number; assetBalance?: bigint; allowance?: bigint; okbBalance?: bigint; assetDecimals?: unknown; stableDecimals?: unknown; approvalResult?: Hex; approvalNoReturn?: boolean; approvalError?: boolean; swapError?: boolean; swapEstimateError?: boolean };
 function readClient(options: ClientOptions = {}, estimates: Array<{ to: Address; data: Hex }> = []): MainnetReadOnlyClient {
   return {
@@ -71,13 +76,29 @@ function readClient(options: ClientOptions = {}, estimates: Array<{ to: Address;
   };
 }
 async function prepared() {
-  const current = adapter();
+  const { current, fake } = adapter();
   const quote = await current.getQuote({ assetAmount: amount, assetKey: 'wAapl', buyerAddress: buyer, invoice });
-  return { current, quote, approval: await current.prepareApprovalTransaction(quote), swap: await current.prepareSwapTransaction(quote) };
+  return { current, fake, quote, approval: await current.prepareApprovalTransaction(quote), swap: await current.prepareSwapTransaction(quote) };
 }
 function builderCodeClient() { return { async getChainId() { return 196; }, async readContract() { return buyer; } }; }
 
 describe('mainnet preflight', () => {
+  it('fetches a fresh authenticated swap itself and ignores a caller-supplied swap object', async () => {
+    const setup = await prepared();
+    const repository = new InMemoryMainnetReconciliationRepository();
+    const result = await runMainnetPreflight({
+      adapter: setup.current, invoice, quote: setup.quote, approval: setup.approval,
+      swap: { ...setup.swap, to: merchant, data: '0x1234' as Hex },
+      publicClient: readClient(), builderCodeClient: builderCodeClient(),
+      expectedBuilderPayoutAddress: buyer, repository,
+    });
+    expect(result.status).toBe('READY');
+    expect(setup.fake.swapCalls).toBe(2);
+    const persisted = await repository.getPreparation(result.preparationId!);
+    expect(persisted?.swap.to.toLowerCase()).toBe(router.toLowerCase());
+    expect(persisted?.authenticatedSwapResponseHash).toBe(persisted?.swap.execution?.authenticatedResponseHash);
+  });
+
   it('continues only with exact allowance, then estimates exact attributed calls and applies a 20% gas margin', async () => {
     const setup = await prepared();
     const estimated: Array<{ to: Address; data: Hex }> = [];

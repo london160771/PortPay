@@ -3,7 +3,8 @@ import { randomUUID } from 'node:crypto';
 import { decodeFunctionData, getAddress, isAddress, keccak256, parseAbi, type Address, type Hex } from 'viem';
 import { databaseConfig, isDatabaseConfigured } from '../config/database.js';
 import { VERIFIED_TESTNET_BUILDER_CODE } from '../config/xlayerMainnet.js';
-import type { MainnetQuote, PreparedMainnetTransaction } from './mainnet.js';
+import { appendBuilderCodeSuffix, toMainnetBuilderCodeDataSuffix } from './builderCodes.js';
+import { isAuthenticatedMainnetSwapPreparation, validateMainnetSwapExecutionEvidence, type MainnetQuote, type PreparedMainnetTransaction } from './mainnet.js';
 
 export type MainnetPreparationEvidence = {
   id: string;
@@ -15,7 +16,15 @@ export type MainnetPreparationEvidence = {
   inputToken: Address;
   outputToken: Address;
   exactInputAmount: string;
+  expectedOutput: string;
   minimumReceive: string;
+  routePath: string;
+  routeFingerprint: Hex;
+  slippagePercent: string;
+  previewQuoteHash: Hex;
+  preparationHash: Hex;
+  authenticatedSwapResponseHash: Hex;
+  preparedAt: string;
   router: Address;
   spender: Address;
   attributedApprovalCalldata: Hex;
@@ -94,16 +103,30 @@ export async function persistMainnetPreparation(options: {
   snapshotBlockHash: Hex;
 }): Promise<MainnetPreparationEvidence> {
   const { quote, approval, swap } = options;
+  if (!isAuthenticatedMainnetSwapPreparation(swap)) {
+    throw new Error('Only a fresh server-side authenticated OKX V6 /swap preparation can be persisted.');
+  }
   if (!approval.attributedData || !swap.attributedData || !approval.builderCode || approval.builderCode !== swap.builderCode
+    || swap.execution?.builderCode !== approval.builderCode
     || !/^[a-z0-9]{16}$/.test(approval.builderCode) || approval.builderCode === VERIFIED_TESTNET_BUILDER_CODE) {
     throw new Error('Both exact prepared transactions and a separate valid mainnet Builder Code are required to persist preparation evidence.');
   }
   if (!isAddress(options.builderPayout)) throw new Error('A verified mainnet Builder Code payout is required.');
+  const suffix = toMainnetBuilderCodeDataSuffix(approval.builderCode);
+  if (!suffix || approval.attributedData !== appendBuilderCodeSuffix(approval.data, suffix)
+    || swap.attributedData !== appendBuilderCodeSuffix(swap.data, suffix)) {
+    throw new Error('Prepared approval and swap calldata must contain the exact configured mainnet Builder Code suffix.');
+  }
+  validateMainnetSwapExecutionEvidence(quote, swap);
   const decoded = decodeFunctionData({ abi: approvalAbi, data: approval.attributedData.slice(0, approval.data.length) as Hex });
   if (decoded.functionName !== 'approve' || typeof decoded.args?.[0] !== 'string' || decoded.args[1] !== BigInt(quote.assetAmount)
     || approval.kind !== 'approval' || approval.chainId !== 196 || approval.value !== 0n
     || approval.from.toLowerCase() !== quote.buyer.toLowerCase() || approval.to.toLowerCase() !== quote.asset.toLowerCase()) {
     throw new Error('Prepared exact approval evidence is malformed or not bound to the quote.');
+  }
+  if (!swap.execution || decoded.args[0].toLowerCase() !== swap.execution.spender.toLowerCase()
+    || keccak256(approval.attributedData) !== swap.execution.attributedApprovalCalldataHash) {
+    throw new Error('Authenticated swap preparation is not bound to the exact attributed approval and spender.');
   }
   const decodedSwap = decodeFunctionData({ abi: recipientSwapAbi, data: swap.attributedData.slice(0, swap.data.length) as Hex });
   const swapArgs = decodedSwap.args as readonly unknown[];
@@ -113,19 +136,24 @@ export async function persistMainnetPreparation(options: {
     || swapArgs[1]?.toString().toLowerCase() !== quote.merchant.toLowerCase()
     || !baseRequest || getAddress(packedAsset) !== getAddress(quote.asset) || baseRequest.toToken.toLowerCase() !== quote.stablecoin.toLowerCase()
     || baseRequest.fromTokenAmount !== BigInt(quote.assetAmount) || baseRequest.minReturnAmount !== BigInt(swap.minReceiveAmount ?? '0')
-    || BigInt(swap.minReceiveAmount ?? '0') < BigInt(quote.minReceiveAmount)) {
+    || BigInt(swap.minReceiveAmount ?? '0') < BigInt(quote.invoiceStablecoinAmount) || !swap.execution) {
     throw new Error('Prepared exact swap evidence is malformed or not bound to the quote recipient and amounts.');
   }
   const evidence: MainnetPreparationEvidence = {
     id: randomUUID(), invoiceId: quote.invoiceId, quoteId: quote.quoteId ?? `${quote.invoiceId}:${quote.createdAt}`,
     buyer: getAddress(quote.buyer), merchant: getAddress(quote.merchant), chainId: 196,
     inputToken: getAddress(quote.asset), outputToken: getAddress(quote.stablecoin), exactInputAmount: quote.assetAmount,
-    minimumReceive: quote.minReceiveAmount, router: getAddress(swap.to), spender: getAddress(decoded.args[0]),
+    expectedOutput: swap.execution.expectedOutputAmount, minimumReceive: swap.execution.minimumReceiveAmount,
+    routePath: swap.execution.routePath, routeFingerprint: swap.execution.routeFingerprint,
+    slippagePercent: swap.execution.slippagePercent, previewQuoteHash: swap.execution.previewQuoteHash,
+    preparationHash: swap.execution.preparationHash, preparedAt: swap.execution.preparedAt,
+    authenticatedSwapResponseHash: swap.execution.authenticatedResponseHash,
+    router: getAddress(swap.to), spender: getAddress(decoded.args[0]),
     attributedApprovalCalldata: approval.attributedData, attributedApprovalCalldataHash: keccak256(approval.attributedData),
     attributedSwapCalldata: swap.attributedData, attributedSwapCalldataHash: keccak256(swap.attributedData),
     builderCode: approval.builderCode, builderPayout: getAddress(options.builderPayout),
     preparationBlockNumber: options.snapshotBlockNumber.toString(), preparationBlockHash: options.snapshotBlockHash,
-    expiresAt: quote.expiresAt, quote: structuredClone(quote), approval: structuredClone(approval), swap: structuredClone(swap),
+    expiresAt: swap.execution.expiresAt, quote: structuredClone(quote), approval: structuredClone(approval), swap: structuredClone(swap),
     stablecoinInvoiceAmount: quote.invoiceStablecoinAmount,
   };
   await options.repository.savePreparation(evidence);

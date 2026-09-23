@@ -100,7 +100,8 @@ export type MainnetPreflightRequest = {
   invoice: Invoice;
   quote: MainnetQuote;
   approval: PreparedMainnetTransaction;
-  swap: PreparedMainnetTransaction;
+  /** @deprecated Ignored. Preflight fetches a fresh authenticated /swap response server-side. */
+  swap?: PreparedMainnetTransaction;
   publicClient?: MainnetReadOnlyClient;
   builderCodeClient?: MainnetBuilderCodeReadClient;
   repository?: MainnetReconciliationRepository;
@@ -246,27 +247,30 @@ export async function runMainnetPreflight(request: MainnetPreflightRequest): Pro
   let chainId: number;
   try { chainId = await publicClient.getChainId(); }
   catch { return failure('RPC_ERROR', 'Unable to read the X Layer Mainnet chain ID.', builderCode); }
-  if (chainId !== 196 || request.quote.chainId !== 196 || request.approval.chainId !== 196 || request.swap.chainId !== 196) return failure('WRONG_CHAIN', 'Every mainnet preparation object and the read-only RPC must use chain 196.', builderCode);
+  if (chainId !== 196 || request.quote.chainId !== 196 || request.approval.chainId !== 196) return failure('WRONG_CHAIN', 'The quote, approval preparation, and read-only RPC must use chain 196.', builderCode);
   if (request.quote.invoiceId !== request.invoice.id) return failure('BLOCKED', 'The quote is bound to a different invoice.', builderCode);
   if (!sameAddress(request.quote.merchant, request.invoice.merchantAddress)) return failure('WRONG_RECIPIENT', 'The quote merchant does not match the invoice merchant.', builderCode);
   const expectedAsset = mainnetSupportedAssets.find((asset) => asset.key === request.quote.assetKey);
   if (!expectedAsset || !sameAddress(request.quote.asset, expectedAsset.address) || !sameAddress(request.quote.stablecoin, mainnetAddressConfig.usdt0)) return failure('INVALID_ROUTE', 'The quote tokens do not match the isolated mainnet configuration.', builderCode);
-  try {
-    const expectedInvoiceAmount = parseUnits(request.invoice.amountUsdt0, 6).toString();
-    if (request.quote.invoiceStablecoinAmount !== expectedInvoiceAmount || BigInt(request.quote.minReceiveAmount) < BigInt(expectedInvoiceAmount) || BigInt(request.quote.minReceiveAmount) > BigInt(request.quote.quotedStablecoinAmount)) return failure('INVALID_ROUTE', 'The quote output or minimum receive does not satisfy the invoice.', builderCode);
-    await request.adapter.validatePreparedTransaction(request.quote, request.approval);
-    await request.adapter.validatePreparedTransaction(request.quote, request.swap);
-  } catch (error) {
-    const mapped = mapPreparationError(error);
-    return failure(mapped.status, mapped.reason, builderCode);
-  }
   if (builderCode.status !== 'VERIFIED') {
     const reason = builderCode.status === 'MISSING' || builderCode.status === 'PAYOUT_NOT_CONFIGURED'
       ? 'A separate registered mainnet Builder Code is required before live-ready status.'
       : `Mainnet Builder Code verification is ${builderCode.status.toLowerCase()}.`;
     return failure(builderCode.status === 'MISSING' || builderCode.status === 'PAYOUT_NOT_CONFIGURED' ? 'BLOCKED' : 'INVALID_ATTRIBUTION', reason, builderCode);
   }
-
+  let swap: PreparedMainnetTransaction;
+  try {
+    const expectedInvoiceAmount = parseUnits(request.invoice.amountUsdt0, 6).toString();
+    if (request.quote.invoiceStablecoinAmount !== expectedInvoiceAmount || BigInt(request.quote.minReceiveAmount) < BigInt(expectedInvoiceAmount) || BigInt(request.quote.minReceiveAmount) > BigInt(request.quote.quotedStablecoinAmount)) return failure('INVALID_ROUTE', 'The quote output or minimum receive does not satisfy the invoice.', builderCode);
+    await request.adapter.validatePreparedTransaction(request.quote, request.approval);
+    // A request-supplied swap object is never execution authority. Obtain a new
+    // authenticated OKX V6 response inside the backend immediately before acceptance.
+    swap = await request.adapter.prepareSwapTransaction(request.quote, request.approval);
+    await request.adapter.validatePreparedTransaction(request.quote, swap);
+  } catch (error) {
+    const mapped = mapPreparationError(error);
+    return failure(mapped.status, mapped.reason, builderCode);
+  }
   let balances: MainnetBalanceSnapshot;
   try { balances = await readMainnetBalances(publicClient, request.quote, request.approval); }
   catch (error) {
@@ -283,7 +287,7 @@ export async function runMainnetPreflight(request: MainnetPreflightRequest): Pro
       repository: request.repository,
       quote: request.quote,
       approval: request.approval,
-      swap: request.swap,
+      swap,
       builderPayout: builderCode.payoutAddress,
       snapshotBlockNumber: BigInt(balances.snapshotBlockNumber),
       snapshotBlockHash: balances.snapshotBlockHash,
@@ -306,14 +310,14 @@ export async function runMainnetPreflight(request: MainnetPreflightRequest): Pro
   }
 
   let gas: Pick<MainnetBalanceSnapshot, 'requiredGasWei' | 'approvalGasEstimate' | 'swapGasEstimate' | 'gasPriceWei'>;
-  try { gas = await estimateBufferedGas(publicClient, request.approval, request.swap); }
+  try { gas = await estimateBufferedGas(publicClient, request.approval, swap); }
   catch (error) {
     return failure('RPC_ERROR', error instanceof Error ? `Stage B exact attributed gas estimation failed: ${error.message}` : 'Stage B exact attributed gas estimation failed.', builderCode, balances, { stage: 'swap', approval: 'not-run', swap: 'not-run' }, preparationId);
   }
   balances = { ...balances, ...gas };
   try {
-    if (!request.swap.attributedData) throw new Error('The swap is missing its exact attributed calldata.');
-    await publicClient.call({ account: request.swap.from, to: request.swap.to, data: request.swap.attributedData, value: request.swap.value });
+    if (!swap.attributedData) throw new Error('The swap is missing its exact attributed calldata.');
+    await publicClient.call({ account: swap.from, to: swap.to, data: swap.attributedData, value: swap.value });
   } catch (error) {
     return failure('SIMULATION_FAILED', error instanceof Error ? error.message : 'Stage B swap simulation failed.', builderCode, balances, { stage: 'swap', approval: 'not-run', swap: 'not-run' }, preparationId);
   }

@@ -38,7 +38,7 @@ const swapAbi = parseAbi([
 const inputAmount = '2965213342702937';
 const spender = '0x8b773d83bc66be128c60e07e17c8901f7a64f000' as Address;
 const router = '0x7c5bee2a8091c3ef39072f64f18fac913060aeaf' as Address;
-const routePath = `${mainnetAddressConfig.wAapl}--0x4ae46a509f6b1d9056937ba4500cb143933d2dc8--0x779ded0c9e1022225f8e0630b35a9b54be713736`;
+const routePath = `${mainnetAddressConfig.wAapl}--0x779ded0c9e1022225f8e0630b35a9b54be713736`;
 
 function token(address: string, symbol: string, decimal: string): OkxQuoteData['fromToken'] {
   return {
@@ -181,7 +181,7 @@ describe('OKXDEXMainnetAdapter preparation boundary', () => {
     expect(attributedDecoded.args?.[1]).toBe(BigInt(inputAmount));
   });
 
-  it('prepares a direct merchant-recipient swap and validates its canonical preparation', async () => {
+  it('accepts a direct route leg with exactly one 100% protocol', async () => {
     const { adapter } = createAdapter();
     const quote = await createQuote(adapter);
     const prepared = await adapter.prepareSwapTransaction(quote);
@@ -195,6 +195,18 @@ describe('OKXDEXMainnetAdapter preparation boundary', () => {
     const attributedDecoded = decodeFunctionData({ abi: swapAbi, data: prepared.attributedData! });
     expect((attributedDecoded.args[1] as string).toLowerCase()).toBe(merchant.toLowerCase());
     await expect(adapter.validatePreparedTransaction(quote, prepared)).resolves.toBeUndefined();
+    expect(prepared.execution?.authenticatedResponseHash).toMatch(/^0x[0-9a-f]{64}$/);
+    expect(prepared.execution?.spender.toLowerCase()).toBe(spender.toLowerCase());
+    expect(prepared.execution?.attributedApprovalCalldataHash).toMatch(/^0x[0-9a-f]{64}$/);
+    expect(prepared.execution?.authenticatedResponse.tx.data).toBe(prepared.data);
+    expect(prepared.execution?.route[0]?.protocols).toEqual([{ dexName: 'Uniswap V3', percent: '100' }]);
+  });
+
+  it('rejects caller-constructed swap preparation objects without backend-held authenticated provenance', async () => {
+    const { adapter } = createAdapter();
+    const quote = await createQuote(adapter);
+    const prepared = await adapter.prepareSwapTransaction(quote);
+    await expect(adapter.validatePreparedTransaction(quote, { ...prepared })).rejects.toThrow('not produced by a fresh authenticated OKX V6 /swap response');
   });
 
   it('rejects stale quotes, wrong merchant calldata, wrong spender, and wrong router', async () => {
@@ -229,7 +241,7 @@ describe('OKXDEXMainnetAdapter preparation boundary', () => {
     await expect(normal.adapter.validatePreparedTransaction(normalQuote, {
       ...prepared,
       to: otherMerchant,
-    })).rejects.toThrow('router or calldata');
+    })).rejects.toThrow('not produced by a fresh authenticated');
   });
 
   it('rejects wrong-chain or testnet-token quote data and has no broadcast method', async () => {
@@ -288,10 +300,133 @@ describe('OKXDEXMainnetAdapter preparation boundary', () => {
     const adapter = createAdapter(wrongSlippage).adapter;
     await expect(adapter.prepareSwapTransaction(await createQuote(adapter))).rejects.toThrow('slippage');
 
-    const wrongQuoteId = new FakeOkxClient();
-    wrongQuoteId.swap = { ...swapData(), routerResult: quoteData({ quoteId: 'quote-2' }) };
-    const quoteIdAdapter = createAdapter(wrongQuoteId).adapter;
-    await expect(quoteIdAdapter.prepareSwapTransaction(await createQuote(quoteIdAdapter))).rejects.toThrow('quote ID');
+  });
+
+  it('accepts connected multi-hop legs with exactly one 100% protocol per leg when quote IDs differ', async () => {
+    const intermediate = '0x2222222222222222222222222222222222222222' as Address;
+    const fake = new FakeOkxClient();
+    fake.swap = {
+      ...swapData(),
+      routerResult: quoteData({
+        quoteId: 'swap-response-id-is-not-a-binding-field',
+        router: `${mainnetAddressConfig.wAapl}--${intermediate}--${mainnetAddressConfig.usdt0}`,
+        dexRouterList: [
+          { fromToken: token(mainnetAddressConfig.wAapl, 'wAAPLx', '18'), toToken: token(intermediate, 'MID', '18'), fromTokenIndex: '0', toTokenIndex: '1', dexProtocol: { dexName: 'Pool A', percent: '100' } },
+          { fromToken: token(intermediate, 'MID', '18'), toToken: token(mainnetAddressConfig.usdt0, 'USD₮0', '6'), fromTokenIndex: '1', toTokenIndex: '2', dexProtocol: { dexName: 'Pool B', percent: '100' } },
+        ],
+        toTokenAmount: '1002000',
+      }),
+    };
+    const { adapter } = createAdapter(fake);
+    const quote = await createQuote(adapter);
+    const prepared = await adapter.prepareSwapTransaction(quote);
+    expect(prepared.execution?.expectedOutputAmount).toBe('1002000');
+    expect(prepared.execution?.routeFingerprint).toMatch(/^0x[0-9a-f]{64}$/);
+    expect(prepared.execution?.routePath).not.toBe(quote.routerPath);
+    expect(prepared.execution?.route).toHaveLength(2);
+    expect(prepared.execution?.route.map((leg) => leg.protocols)).toEqual([
+      [{ dexName: 'Pool A', percent: '100' }],
+      [{ dexName: 'Pool B', percent: '100' }],
+    ]);
+    await expect(adapter.validatePreparedTransaction(quote, prepared)).resolves.toBeUndefined();
+  });
+
+  it.each([
+    ['two-protocol 50/50 split', [
+      { dexName: 'Pool A', percent: '50' },
+      { dexName: 'Pool B', percent: '50' },
+    ], 'exactly one protocol'],
+    ['two-protocol 70/30 split', [
+      { dexName: 'Pool A', percent: '70' },
+      { dexName: 'Pool B', percent: '30' },
+    ], 'exactly one protocol'],
+    ['one protocol at 99%', { dexName: 'Pool A', percent: '99' }, 'exactly 100%'],
+    ['empty protocol list', [], 'exactly one protocol'],
+  ] as const)('rejects %s', async (_caseName, dexProtocol, expectedMessage) => {
+    const fake = new FakeOkxClient();
+    fake.swap = {
+      ...swapData(),
+      routerResult: quoteData({
+        dexRouterList: [{
+          fromToken: token(mainnetAddressConfig.wAapl, 'wAAPLx', '18'),
+          toToken: token(mainnetAddressConfig.usdt0, 'USD₮0', '6'),
+          dexProtocol,
+        }],
+      }),
+    };
+    const { adapter } = createAdapter(fake);
+    await expect(adapter.prepareSwapTransaction(await createQuote(adapter))).rejects.toThrow(expectedMessage);
+  });
+
+  it.each([
+    ['disconnected intermediate leg', (asset: Address, stablecoin: Address, middle: Address) => ({
+      router: `${asset}--${middle}--${stablecoin}`,
+      dexRouterList: [
+        { fromToken: token(asset, 'wAAPLx', '18'), toToken: token(middle, 'MID', '18'), dexProtocol: { dexName: 'Pool A', percent: '100' } },
+        { fromToken: token(otherMerchant, 'OTHER', '18'), toToken: token(stablecoin, 'USD₮0', '6'), dexProtocol: { dexName: 'Pool B', percent: '100' } },
+      ],
+    }), 'disconnected or reordered'],
+    ['wrong starting token', (asset: Address, stablecoin: Address) => ({
+      router: `${asset}--${stablecoin}`,
+      dexRouterList: [{ fromToken: token(otherMerchant, 'OTHER', '18'), toToken: token(stablecoin, 'USD₮0', '6'), dexProtocol: { dexName: 'Pool', percent: '100' } }],
+    }), 'start at the selected asset'],
+    ['wrong final token', (asset: Address, stablecoin: Address) => ({
+      router: `${asset}--${stablecoin}`,
+      dexRouterList: [{ fromToken: token(asset, 'wAAPLx', '18'), toToken: token(otherMerchant, 'OTHER', '6'), dexProtocol: { dexName: 'Pool', percent: '100' } }],
+    }), 'end at official USD₮0'],
+    ['reordered legs', (asset: Address, stablecoin: Address, middle: Address) => ({
+      router: `${asset}--${middle}--${stablecoin}`,
+      dexRouterList: [
+        { fromToken: token(middle, 'MID', '18'), toToken: token(stablecoin, 'USD₮0', '6'), fromTokenIndex: '1', toTokenIndex: '2', dexProtocol: { dexName: 'Pool B', percent: '100' } },
+        { fromToken: token(asset, 'wAAPLx', '18'), toToken: token(middle, 'MID', '18'), fromTokenIndex: '0', toTokenIndex: '1', dexProtocol: { dexName: 'Pool A', percent: '100' } },
+      ],
+    }), 'start at the selected asset'],
+    ['duplicate unrelated route leg', (asset: Address, stablecoin: Address) => ({
+      router: `${asset}--${stablecoin}`,
+      dexRouterList: [
+        { fromToken: token(asset, 'wAAPLx', '18'), toToken: token(stablecoin, 'USD₮0', '6'), dexProtocol: { dexName: 'Pool A', percent: '100' } },
+        { fromToken: token(asset, 'wAAPLx', '18'), toToken: token(stablecoin, 'USD₮0', '6'), dexProtocol: { dexName: 'Pool A', percent: '100' } },
+      ],
+    }), 'disconnected or reordered'],
+    ['malformed route indices', (asset: Address, stablecoin: Address) => ({
+      router: `${asset}--${stablecoin}`,
+      dexRouterList: [{ fromToken: token(asset, 'wAAPLx', '18'), toToken: token(stablecoin, 'USD₮0', '6'), fromTokenIndex: 'bad', toTokenIndex: '1', dexProtocol: { dexName: 'Pool', percent: '100' } }],
+    }), 'malformed token-index'],
+  ])('rejects %s', async (_name, makeRoute, message) => {
+    const fake = new FakeOkxClient();
+    const middle = '0x2222222222222222222222222222222222222222' as Address;
+    fake.swap = { ...swapData(), routerResult: quoteData(makeRoute(mainnetAddressConfig.wAapl as Address, mainnetAddressConfig.usdt0 as Address, middle)) };
+    const { adapter } = createAdapter(fake);
+    await expect(adapter.prepareSwapTransaction(await createQuote(adapter))).rejects.toThrow(message);
+  });
+
+  it('rejects final swap preparations that miss invoice value or contain malformed/mismatched route intent', async () => {
+    const cases: Array<{ mutate: (fake: FakeOkxClient) => void; message: string }> = [
+      { mutate: (fake) => { fake.swap = { ...swapData(), routerResult: quoteData({ toTokenAmount: '999999' }), tx: { ...swapData().tx, minReceiveAmount: '999999' } }; }, message: 'minimum receive' },
+      { mutate: (fake) => { fake.swap = { ...swapData(), routerResult: quoteData({ router: `0x1111111111111111111111111111111111111111--${mainnetAddressConfig.usdt0}` }) }; }, message: 'malformed' },
+      { mutate: (fake) => { fake.swap = { ...swapData(), routerResult: quoteData({ fromTokenAmount: '1' }) }; }, message: 'amounts are inconsistent' },
+      { mutate: (fake) => { fake.swap = { ...swapData(), routerResult: quoteData({ toToken: token(otherMerchant, 'Other', '6') }) }; }, message: 'unexpected token' },
+    ];
+    for (const testCase of cases) {
+      const fake = new FakeOkxClient();
+      testCase.mutate(fake);
+      const { adapter } = createAdapter(fake);
+      await expect(adapter.prepareSwapTransaction(await createQuote(adapter))).rejects.toThrow(testCase.message);
+    }
+  });
+
+  it('binds final attributed calldata and freshness into reconciliation execution evidence', async () => {
+    const { adapter } = createAdapter();
+    const quote = await createQuote(adapter);
+    const prepared = await adapter.prepareSwapTransaction(quote);
+    expect(prepared.execution?.attributedSwapCalldataHash).toBeTruthy();
+    expect(prepared.execution?.previewQuoteHash).toBeTruthy();
+    expect(prepared.execution?.preparedAt).toBe('2026-09-21T00:00:00.000Z');
+    expect(Date.parse(prepared.execution!.expiresAt)).toBeLessThanOrEqual(Date.parse(quote.expiresAt));
+    await expect(adapter.validatePreparedTransaction(quote, {
+      ...prepared,
+      attributedData: `${prepared.attributedData!.slice(0, -2)}00` as Hex,
+    })).rejects.toThrow('suffix is not appended');
   });
 
   it('rejects the verified testnet Builder Code even if no environment variable is set', () => {

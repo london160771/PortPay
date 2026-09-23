@@ -4,6 +4,7 @@ import type { Invoice } from '../invoices/types.js';
 import { mainnetAddressConfig, VERIFIED_MAINNET_BUILDER_CODE_REGISTRY_ADDRESS, VERIFIED_MAINNET_USDT0_ADDRESS, VERIFIED_TESTNET_BUILDER_CODE } from '../config/xlayerMainnet.js';
 import { verifyMainnetBuilderCode, type MainnetBuilderCodeCheck } from './mainnetBuilderCodes.js';
 import { erc20ReadAbi, type MainnetReadOnlyClient } from './mainnetPreflight.js';
+import { validateMainnetSwapExecutionEvidence } from './mainnet.js';
 import type {
   MainnetBalanceEvidence,
   MainnetPreparationEvidence,
@@ -97,7 +98,6 @@ function validatePersistedEvidence(evidence: MainnetPreparationEvidence, invoice
   const invoiceOutput = positiveStoredInteger(evidence.stablecoinInvoiceAmount, 'Invoice stablecoin amount');
   const expectedInvoiceOutput = parseUnits(invoice.amountUsdt0, 6);
   const expiresAt = Date.parse(evidence.expiresAt);
-  const quoteId = evidence.quote.quoteId ?? `${evidence.quote.invoiceId}:${evidence.quote.createdAt}`;
   let approvalFunction: ReturnType<typeof decodeFunctionData<typeof approvalAbi>>;
   try {
     approvalFunction = decodeFunctionData({ abi: approvalAbi, data: evidence.attributedApprovalCalldata.slice(0, evidence.approval.data.length) as Hex });
@@ -107,11 +107,26 @@ function validatePersistedEvidence(evidence: MainnetPreparationEvidence, invoice
   catch { return fail('INVALID_ATTRIBUTION', 'Persisted approval attribution is malformed.'); }
   const approval = evidence.approval;
   const swap = evidence.swap;
+  try { validateMainnetSwapExecutionEvidence(evidence.quote, swap); }
+  catch { return fail('INVALID_PREPARATION', 'Persisted final swap preparation binding is invalid.'); }
+  const execution = swap.execution;
   if (!sameAddress(merchant, invoice.merchantAddress) || !sameAddress(evidence.quote.merchant, merchant)
     || !sameAddress(evidence.quote.buyer, buyer) || !sameAddress(evidence.quote.asset, asset)
     || !sameAddress(evidence.quote.stablecoin, stablecoin) || evidence.quote.assetAmount !== evidence.exactInputAmount
-    || evidence.quote.minReceiveAmount !== evidence.minimumReceive || evidence.quote.invoiceStablecoinAmount !== evidence.stablecoinInvoiceAmount
-    || evidence.quoteId !== quoteId || evidence.quote.expiresAt !== evidence.expiresAt
+    || evidence.quote.invoiceStablecoinAmount !== evidence.stablecoinInvoiceAmount
+    || !execution || execution.invoiceId !== invoice.id || execution.chainId !== 196
+    || !sameAddress(execution.buyer, buyer) || !sameAddress(execution.merchant, merchant)
+    || !sameAddress(execution.inputToken, asset) || !sameAddress(execution.outputToken, stablecoin)
+    || execution.exactInputAmount !== evidence.exactInputAmount || execution.expectedOutputAmount !== evidence.expectedOutput
+    || execution.authenticatedResponseHash !== evidence.authenticatedSwapResponseHash
+    || execution.spender.toLowerCase() !== evidence.spender.toLowerCase()
+    || execution.attributedApprovalCalldataHash !== evidence.attributedApprovalCalldataHash
+    || execution.minimumReceiveAmount !== evidence.minimumReceive || execution.routePath !== evidence.routePath
+    || execution.routeFingerprint !== evidence.routeFingerprint || execution.slippagePercent !== evidence.slippagePercent
+    || execution.previewQuoteHash !== evidence.previewQuoteHash || execution.preparationHash !== evidence.preparationHash
+    || execution.preparedAt !== evidence.preparedAt || execution.expiresAt !== evidence.expiresAt
+    || execution.builderCode !== evidence.builderCode
+    || !sameAddress(execution.router, router)
     || !Number.isFinite(expiresAt) || invoiceOutput !== expectedInvoiceOutput
     || !sameAddress(swap.to, router) || !sameAddress(swap.from, buyer) || swap.value !== 0n || swap.kind !== 'swap'
     || approval.kind !== 'approval' || !sameAddress(approval.from, buyer) || approval.chainId !== 196

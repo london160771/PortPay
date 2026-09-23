@@ -2,8 +2,10 @@ import {
   decodeFunctionData,
   getAddress,
   isAddress,
+  keccak256,
   parseAbi,
   parseUnits,
+  stringToHex,
   type Address,
   type Hex,
 } from 'viem';
@@ -22,6 +24,7 @@ import { appendBuilderCodeSuffix, toMainnetBuilderCodeDataSuffix } from './build
 import {
   OkxDexApiClient,
   type OkxApprovalData,
+  type OkxDexProtocol,
   type OkxDexRoute,
   type OkxQuoteData,
   type OkxSwapData,
@@ -115,9 +118,46 @@ export type PreparedMainnetTransaction = {
   kind: 'approval' | 'swap';
   minReceiveAmount?: string;
   router?: Address;
+  execution?: MainnetSwapExecutionEvidence;
   to: Address;
   value: bigint;
   chainId: 196;
+};
+
+export type MainnetRouteLegEvidence = {
+  fromToken: Address;
+  toToken: Address;
+  fromTokenIndex?: string;
+  toTokenIndex?: string;
+  protocols: readonly { dexName: string; percent: string }[];
+};
+
+/** Immutable semantic binding to the final OKX /swap response, not its diagnostic quoteId. */
+export type MainnetSwapExecutionEvidence = {
+  invoiceId: string;
+  chainId: 196;
+  buyer: Address;
+  merchant: Address;
+  inputToken: Address;
+  outputToken: Address;
+  exactInputAmount: string;
+  expectedOutputAmount: string;
+  minimumReceiveAmount: string;
+  router: Address;
+  spender: Address;
+  attributedApprovalCalldataHash: Hex;
+  routePath: string;
+  route: readonly MainnetRouteLegEvidence[];
+  routeFingerprint: Hex;
+  authenticatedResponse: OkxSwapData;
+  authenticatedResponseHash: Hex;
+  slippagePercent: string;
+  builderCode?: string;
+  previewQuoteHash: Hex;
+  attributedSwapCalldataHash: Hex;
+  preparedAt: string;
+  expiresAt: string;
+  preparationHash: Hex;
 };
 
 export class MainnetPreparationError extends Error {
@@ -125,6 +165,14 @@ export class MainnetPreparationError extends Error {
     super(message);
     this.name = 'MainnetPreparationError';
   }
+}
+
+// A caller cannot manufacture execution authority from a serialized preparation object.
+// Only objects created from this adapter's authenticated server-side /swap request enter this set.
+const authenticatedMainnetSwapPreparations = new WeakSet<object>();
+
+export function isAuthenticatedMainnetSwapPreparation(prepared: PreparedMainnetTransaction): boolean {
+  return authenticatedMainnetSwapPreparations.has(prepared);
 }
 
 function normalizeAddress(value: string, label: string): Address {
@@ -143,10 +191,205 @@ function sameAddress(left: string, right: string): boolean {
   return left.toLowerCase() === right.toLowerCase();
 }
 
-function routeContains(routeList: readonly OkxDexRoute[], address: Address): boolean {
-  return routeList.some((route) =>
-    sameAddress(route.fromToken.tokenContractAddress, address)
-    || sameAddress(route.toToken.tokenContractAddress, address));
+function hashJson(value: unknown): Hex {
+  return keccak256(stringToHex(JSON.stringify(value)));
+}
+
+function canonicalJson(value: unknown): string {
+  if (value === null || typeof value !== 'object') {
+    const serialized = JSON.stringify(value);
+    if (serialized === undefined) throw new MainnetPreparationError('Authenticated OKX response contains a non-JSON value.');
+    return serialized;
+  }
+  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(',')}]`;
+  const record = value as Record<string, unknown>;
+  return `{${Object.keys(record).sort().map((key) => `${JSON.stringify(key)}:${canonicalJson(record[key])}`).join(',')}}`;
+}
+
+function hashCanonicalJson(value: unknown): Hex {
+  return keccak256(stringToHex(canonicalJson(value)));
+}
+
+function authenticatedResponseHash(value: OkxSwapData): Hex { return hashCanonicalJson(value); }
+
+function routeFingerprint(path: string, legs: readonly MainnetRouteLegEvidence[]): Hex {
+  return hashJson({ path, legs: legs.map((leg) => ({
+    fromToken: leg.fromToken,
+    toToken: leg.toToken,
+    ...(leg.fromTokenIndex === undefined ? {} : { fromTokenIndex: leg.fromTokenIndex }),
+    ...(leg.toTokenIndex === undefined ? {} : { toTokenIndex: leg.toTokenIndex }),
+    protocols: leg.protocols,
+  })) });
+}
+
+function canonicalRouteEvidence(raw: OkxQuoteData, asset: Address, stablecoin: Address): { path: string; legs: MainnetRouteLegEvidence[]; fingerprint: Hex } {
+  if (!raw.router || typeof raw.router !== 'string') throw new MainnetPreparationError('OKX route path is missing.');
+  const path = raw.router.split('--');
+  if (path.length < 2 || path.some((part) => !isAddress(part))
+    || !sameAddress(path[0], asset) || !sameAddress(path[path.length - 1], stablecoin)) {
+    throw new MainnetPreparationError('OKX route path is malformed or does not connect the configured tokens.');
+  }
+  if (!Array.isArray(raw.dexRouterList) || raw.dexRouterList.length === 0) throw new MainnetPreparationError('OKX route legs are missing.');
+  const legs = raw.dexRouterList.map((leg, index): MainnetRouteLegEvidence => {
+    const rawLeg = leg as OkxDexRoute & { routerPercent?: unknown; subRouterList?: unknown };
+    if (rawLeg.routerPercent !== undefined || rawLeg.subRouterList !== undefined) {
+      throw new MainnetPreparationError(`OKX route leg ${index + 1} contains unsupported branch/subroute metadata.`);
+    }
+    const fromToken = normalizeAddress(leg.fromToken.tokenContractAddress, `Route leg ${index + 1} input token`);
+    const toToken = normalizeAddress(leg.toToken.tokenContractAddress, `Route leg ${index + 1} output token`);
+    const hasFromIndex = leg.fromTokenIndex !== undefined;
+    const hasToIndex = leg.toTokenIndex !== undefined;
+    if (hasFromIndex !== hasToIndex) throw new MainnetPreparationError(`OKX route leg ${index + 1} has incomplete token-index metadata.`);
+    if (hasFromIndex && (typeof leg.fromTokenIndex !== 'string' || typeof leg.toTokenIndex !== 'string'
+      || !/^\d+$/.test(leg.fromTokenIndex) || !/^\d+$/.test(leg.toTokenIndex))) {
+      throw new MainnetPreparationError(`OKX route leg ${index + 1} has malformed token-index metadata.`);
+    }
+    if (sameAddress(fromToken, toToken)) throw new MainnetPreparationError(`OKX route leg ${index + 1} does not advance the token path.`);
+    const rawProtocols: readonly OkxDexProtocol[] = !leg.dexProtocol
+      ? []
+      : Array.isArray(leg.dexProtocol)
+        ? leg.dexProtocol as readonly OkxDexProtocol[]
+        : [leg.dexProtocol as OkxDexProtocol];
+    if (rawProtocols.length !== 1) {
+      throw new MainnetPreparationError(`OKX route leg ${index + 1} must contain exactly one protocol; split or empty protocol lists are unsupported.`);
+    }
+    const protocol = rawProtocols[0];
+    if (!protocol || typeof protocol !== 'object' || typeof protocol.dexName !== 'string' || !protocol.dexName.trim()
+      || typeof protocol.percent !== 'string' || !/^\d+(?:\.\d{1,6})?$/.test(protocol.percent)) {
+      throw new MainnetPreparationError(`OKX route leg ${index + 1} has malformed protocol data.`);
+    }
+    const [whole, fraction = ''] = protocol.percent.split('.');
+    const percentageScale = fraction.length;
+    const percentageBase = 10n ** BigInt(percentageScale);
+    const percentage = BigInt(whole!) * percentageBase + BigInt(fraction || '0');
+    if (percentage !== 100n * percentageBase) {
+      throw new MainnetPreparationError(`OKX route leg ${index + 1} protocol percentage must be exactly 100%.`);
+    }
+    return {
+      fromToken,
+      toToken,
+      ...(hasFromIndex ? { fromTokenIndex: leg.fromTokenIndex!, toTokenIndex: leg.toTokenIndex! } : {}),
+      protocols: [{ dexName: protocol.dexName.trim(), percent: protocol.percent }],
+    };
+  });
+  if (!sameAddress(legs[0]!.fromToken, asset) || !sameAddress(legs[legs.length - 1]!.toToken, stablecoin)) {
+    throw new MainnetPreparationError('OKX route legs do not start at the selected asset and end at official USD₮0.');
+  }
+  if (new Set(path.map((part) => part.toLowerCase())).size !== path.length) {
+    throw new MainnetPreparationError('OKX route contains a duplicate token or cycle.');
+  }
+  for (let index = 1; index < legs.length; index += 1) {
+    const previous = legs[index - 1]!;
+    const current = legs[index]!;
+    if (!sameAddress(previous.toToken, current.fromToken)) {
+      throw new MainnetPreparationError(`OKX route legs are disconnected or reordered between legs ${index} and ${index + 1}.`);
+    }
+    if (previous.toTokenIndex !== undefined || current.fromTokenIndex !== undefined) {
+      if (previous.toTokenIndex === undefined || current.fromTokenIndex === undefined || previous.toTokenIndex !== current.fromTokenIndex) {
+        throw new MainnetPreparationError(`OKX route token indices are disconnected between legs ${index} and ${index + 1}.`);
+      }
+    }
+  }
+  const routeTokens = [legs[0]!.fromToken, ...legs.map((leg) => leg.toToken)];
+  if (path.length !== routeTokens.length || path.some((token, index) => !sameAddress(token, routeTokens[index]!))) {
+    throw new MainnetPreparationError('OKX route path contradicts or omits the connected route-leg sequence.');
+  }
+  if (legs.some((leg, index) => leg.fromTokenIndex !== undefined
+    && (BigInt(leg.toTokenIndex!) !== BigInt(leg.fromTokenIndex!) + 1n
+      || (index === 0 ? leg.fromTokenIndex !== '0' : leg.fromTokenIndex !== legs[index - 1]!.toTokenIndex)))) {
+    throw new MainnetPreparationError('OKX route token indices do not describe one contiguous ordered path.');
+  }
+  const normalizedPath = path.map((part) => getAddress(part).toLowerCase()).join('--');
+  const fingerprint = routeFingerprint(normalizedPath, legs);
+  return { path: normalizedPath, legs, fingerprint };
+}
+
+function previewQuoteHash(quote: MainnetQuote): Hex {
+  return hashJson({
+    invoiceId: quote.invoiceId,
+    chainId: quote.chainId,
+    buyer: quote.buyer.toLowerCase(),
+    merchant: quote.merchant.toLowerCase(),
+    inputToken: quote.asset.toLowerCase(),
+    outputToken: quote.stablecoin.toLowerCase(),
+    exactInputAmount: quote.assetAmount,
+    invoiceAmount: quote.invoiceStablecoinAmount,
+    previewOutputAmount: quote.quotedStablecoinAmount,
+    previewMinimumReceiveAmount: quote.minReceiveAmount,
+    previewRoutePath: quote.routerPath?.toLowerCase() ?? null,
+    slippagePercent: quote.slippagePercent,
+    createdAt: quote.createdAt,
+    expiresAt: quote.expiresAt,
+  });
+}
+
+function swapPreparationHash(evidence: Omit<MainnetSwapExecutionEvidence, 'preparationHash'>): Hex {
+  return hashCanonicalJson(evidence);
+}
+
+export function validateMainnetSwapExecutionEvidence(quote: MainnetQuote, prepared: PreparedMainnetTransaction): void {
+  const evidence = prepared.execution;
+  if (!evidence || !prepared.attributedData || !evidence.authenticatedResponse) throw new MainnetPreparationError('Authenticated final swap execution evidence is missing.');
+  const { preparationHash, ...fields } = evidence;
+  const preparedAt = Date.parse(evidence.preparedAt);
+  const expiresAt = Date.parse(evidence.expiresAt);
+  const quoteExpiresAt = Date.parse(quote.expiresAt);
+  const response = evidence.authenticatedResponse;
+  const responseTx = response.tx;
+  const route = canonicalRouteEvidence(response.routerResult, quote.asset, quote.stablecoin);
+  let decoded: ReturnType<typeof decodeFunctionData<typeof recipientSwapAbi>>;
+  try { decoded = decodeFunctionData({ abi: recipientSwapAbi, data: responseTx.data }); }
+  catch { throw new MainnetPreparationError('Authenticated OKX response calldata is not an allowed direct-recipient router call.'); }
+  const receiver = decoded.args[1] as Address;
+  const baseRequest = decoded.args[2] as BaseRequest;
+  const slippageFloor = minimumAfterSlippage(response.routerResult.toTokenAmount, quote.slippagePercent);
+  const invoiceAmount = BigInt(quote.invoiceStablecoinAmount);
+  const expectedMinimum = slippageFloor > invoiceAmount ? slippageFloor : invoiceAmount;
+  const deadlineMs = Number(baseRequest.deadLine * 1000n);
+  const responseExpiresAt = Math.min(quoteExpiresAt, deadlineMs);
+  const suffix = toMainnetBuilderCodeDataSuffix(evidence.builderCode);
+  const attributedResponseData = suffix ? appendBuilderCodeSuffix(responseTx.data, suffix) : undefined;
+  if (preparationHash !== swapPreparationHash(fields)
+    || evidence.authenticatedResponseHash !== authenticatedResponseHash(response)
+    || evidence.previewQuoteHash !== previewQuoteHash(quote)
+    || evidence.invoiceId !== quote.invoiceId || evidence.chainId !== 196
+    || !sameAddress(evidence.buyer, quote.buyer) || !sameAddress(evidence.merchant, quote.merchant)
+    || !sameAddress(evidence.inputToken, quote.asset) || !sameAddress(evidence.outputToken, quote.stablecoin)
+    || evidence.exactInputAmount !== quote.assetAmount || evidence.slippagePercent !== quote.slippagePercent
+    || evidence.builderCode !== prepared.builderCode
+    || !sameAddress(evidence.router, prepared.to) || evidence.minimumReceiveAmount !== prepared.minReceiveAmount
+    || !isAddress(evidence.spender) || !/^0x[0-9a-fA-F]{64}$/.test(evidence.attributedApprovalCalldataHash)
+    || !sameAddress(responseTx.from, quote.buyer) || !sameAddress(responseTx.to, evidence.router)
+    || responseTx.data !== prepared.data || responseTx.value !== '0'
+    || responseTx.minReceiveAmount !== evidence.minimumReceiveAmount
+    || responseTx.slippagePercent !== quote.slippagePercent
+    || !sameAddress(receiver, quote.merchant)
+    || !sameAddress(packedAddress(baseRequest.fromToken), quote.asset)
+    || !sameAddress(baseRequest.toToken, quote.stablecoin)
+    || baseRequest.fromTokenAmount !== BigInt(quote.assetAmount)
+    || baseRequest.minReturnAmount !== BigInt(evidence.minimumReceiveAmount)
+    || !Number.isSafeInteger(deadlineMs) || deadlineMs <= preparedAt
+    || !Number.isFinite(responseExpiresAt) || Date.parse(evidence.expiresAt) !== responseExpiresAt
+    || response.routerResult.chainIndex !== '196' || response.routerResult.fromTokenAmount !== quote.assetAmount
+    || response.routerResult.toTokenAmount !== evidence.expectedOutputAmount
+    || response.routerResult.swapMode !== 'exactIn'
+    || !sameAddress(response.routerResult.fromToken.tokenContractAddress, quote.asset)
+    || !sameAddress(response.routerResult.toToken.tokenContractAddress, quote.stablecoin)
+    || response.routerResult.fromToken.decimal !== '18' || response.routerResult.toToken.decimal !== '6'
+    || route.path !== evidence.routePath
+    || hashCanonicalJson(route.legs) !== hashCanonicalJson(evidence.route)
+    || evidence.routeFingerprint !== route.fingerprint
+    || !attributedResponseData || prepared.attributedData !== attributedResponseData
+    || evidence.attributedSwapCalldataHash !== keccak256(prepared.attributedData)
+    || evidence.routeFingerprint !== routeFingerprint(evidence.routePath, evidence.route)
+    || !/^\d+$/.test(evidence.expectedOutputAmount) || BigInt(evidence.expectedOutputAmount) <= 0n
+    || BigInt(evidence.minimumReceiveAmount) < BigInt(quote.invoiceStablecoinAmount)
+    || BigInt(evidence.minimumReceiveAmount) > BigInt(evidence.expectedOutputAmount)
+    || BigInt(evidence.minimumReceiveAmount) < expectedMinimum
+    || !Number.isFinite(preparedAt) || !Number.isFinite(expiresAt) || !Number.isFinite(quoteExpiresAt)
+    || preparedAt >= expiresAt || expiresAt > quoteExpiresAt) {
+    throw new MainnetPreparationError('Final swap execution evidence does not match the invoice-bound quote intent.');
+  }
 }
 
 function parseGas(value: string, label: string): bigint {
@@ -293,8 +536,23 @@ export class OKXDEXMainnetAdapter {
     });
   }
 
-  async prepareSwapTransaction(quote: MainnetQuote): Promise<PreparedMainnetTransaction> {
+  async prepareSwapTransaction(quote: MainnetQuote, approval?: PreparedMainnetTransaction): Promise<PreparedMainnetTransaction> {
     this.assertFreshQuote(quote);
+    const authenticatedApproval = await this.prepareApprovalTransaction(quote);
+    if (approval && (approval.kind !== 'approval' || approval.data !== authenticatedApproval.data
+      || approval.attributedData !== authenticatedApproval.attributedData
+      || approval.builderCode !== authenticatedApproval.builderCode || approval.dataSuffix !== authenticatedApproval.dataSuffix
+      || approval.from.toLowerCase() !== authenticatedApproval.from.toLowerCase()
+      || approval.to.toLowerCase() !== authenticatedApproval.to.toLowerCase()
+      || approval.chainId !== authenticatedApproval.chainId || approval.value !== 0n)) {
+      throw new MainnetPreparationError('Supplied approval does not match the fresh authenticated OKX approval preparation.');
+    }
+    let decodedApproval: ReturnType<typeof decodeFunctionData<typeof erc20ApproveAbi>>;
+    try { decodedApproval = decodeFunctionData({ abi: erc20ApproveAbi, data: authenticatedApproval.data }); }
+    catch { throw new MainnetPreparationError('Fresh authenticated OKX approval calldata could not be decoded.'); }
+    if (decodedApproval.functionName !== 'approve' || typeof decodedApproval.args?.[0] !== 'string') {
+      throw new MainnetPreparationError('Fresh authenticated OKX approval calldata has an invalid spender.');
+    }
     const raw = await this.apiClient.getSwapTransaction({
       amount: quote.assetAmount,
       fromTokenAddress: quote.asset,
@@ -304,7 +562,7 @@ export class OKXDEXMainnetAdapter {
       userWalletAddress: quote.buyer,
     });
     const transaction = this.validateSwapResponse(raw, quote);
-    return this.withBuilderCode({
+    const prepared = this.withBuilderCode({
       data: transaction.data,
       from: quote.buyer,
       gas: parseGas(transaction.gas, 'Swap gas limit'),
@@ -315,6 +573,42 @@ export class OKXDEXMainnetAdapter {
       to: normalizeAddress(transaction.to, 'OKX swap router'),
       value: BigInt(transaction.value),
     });
+    const preparedAt = this.now();
+    const deadlineMs = Number(transaction.deadline * 1000n);
+    const expiresAtMs = Math.min(Date.parse(quote.expiresAt), deadlineMs);
+    if (!Number.isSafeInteger(deadlineMs) || expiresAtMs <= preparedAt.getTime()) {
+      throw new MainnetPreparationError('OKX swap preparation is expired or has an invalid deadline.');
+    }
+    const responseSnapshot = structuredClone(raw);
+    const unsignedEvidence: Omit<MainnetSwapExecutionEvidence, 'preparationHash'> = {
+      invoiceId: quote.invoiceId,
+      chainId: 196,
+      buyer: quote.buyer,
+      merchant: quote.merchant,
+      inputToken: quote.asset,
+      outputToken: quote.stablecoin,
+      exactInputAmount: quote.assetAmount,
+      expectedOutputAmount: raw.routerResult.toTokenAmount,
+      minimumReceiveAmount: transaction.minReceiveAmount,
+      router: prepared.to,
+      spender: normalizeAddress(decodedApproval.args[0], 'OKX approval spender'),
+      attributedApprovalCalldataHash: keccak256(authenticatedApproval.attributedData ?? authenticatedApproval.data),
+      routePath: transaction.route.path,
+      route: transaction.route.legs,
+      routeFingerprint: transaction.route.fingerprint,
+      authenticatedResponse: responseSnapshot,
+      authenticatedResponseHash: authenticatedResponseHash(responseSnapshot),
+      slippagePercent: quote.slippagePercent,
+      ...(this.builderCode ? { builderCode: this.builderCode } : {}),
+      previewQuoteHash: previewQuoteHash(quote),
+      attributedSwapCalldataHash: keccak256(prepared.attributedData ?? prepared.data),
+      preparedAt: preparedAt.toISOString(),
+      expiresAt: new Date(expiresAtMs).toISOString(),
+    };
+    prepared.execution = { ...unsignedEvidence, preparationHash: swapPreparationHash(unsignedEvidence) };
+    validateMainnetSwapExecutionEvidence(quote, prepared);
+    authenticatedMainnetSwapPreparations.add(prepared);
+    return prepared;
   }
 
   async validatePreparedTransaction(
@@ -339,17 +633,13 @@ export class OKXDEXMainnetAdapter {
       if (prepared.data !== requirement.data) throw new MainnetPreparationError('Approval calldata is stale or mismatched.');
       return;
     }
-    const raw = await this.apiClient.getSwapTransaction({
-      amount: quote.assetAmount,
-      fromTokenAddress: quote.asset,
-      slippagePercent: quote.slippagePercent,
-      swapReceiverAddress: quote.merchant,
-      toTokenAddress: quote.stablecoin,
-      userWalletAddress: quote.buyer,
-    });
-    const transaction = this.validateSwapResponse(raw, quote);
-    if (!sameAddress(prepared.to, transaction.to) || prepared.data !== transaction.data) {
-      throw new MainnetPreparationError('Swap router or calldata is stale or mismatched.');
+    if (!isAuthenticatedMainnetSwapPreparation(prepared)) {
+      throw new MainnetPreparationError('Swap preparation was not produced by a fresh authenticated OKX V6 /swap response in this backend process.');
+    }
+    validateMainnetSwapExecutionEvidence(quote, prepared);
+    if (!prepared.minReceiveAmount || !sameAddress(prepared.to, prepared.execution!.router)
+      || Date.parse(prepared.execution!.expiresAt) <= this.now().getTime()) {
+      throw new MainnetPreparationError('Swap router, minimum receive, or preparation freshness is invalid.');
     }
   }
 
@@ -363,10 +653,7 @@ export class OKXDEXMainnetAdapter {
     }
     if (raw.swapMode !== 'exactIn') throw new MainnetPreparationError('OKX quote must use exact-input mode.');
     if (raw.fromToken.decimal !== '18' || raw.toToken.decimal !== '6') throw new MainnetPreparationError('OKX quote returned unexpected token decimals.');
-    if (!raw.router) throw new MainnetPreparationError('OKX quote did not bind a router path.');
-    if (!routeContains(raw.dexRouterList, asset) || !routeContains(raw.dexRouterList, stablecoin)) {
-      throw new MainnetPreparationError('OKX route does not bind the configured mainnet tokens.');
-    }
+    canonicalRouteEvidence(raw, asset, stablecoin);
   }
 
   private validateApprovalResponse(raw: OkxApprovalData, quote: MainnetQuote): MainnetApprovalRequirement {
@@ -408,28 +695,21 @@ export class OKXDEXMainnetAdapter {
       || sameAddress(router, quote.buyer) || sameAddress(router, quote.merchant)) {
       throw new MainnetPreparationError('OKX swap router conflicts with a bound payment participant or token.');
     }
-    if (!sameAddress(raw.routerResult.fromToken.tokenContractAddress, quote.asset)
-      || !sameAddress(raw.routerResult.toToken.tokenContractAddress, quote.stablecoin)) {
-      throw new MainnetPreparationError('OKX swap tokens do not match the quote.');
-    }
-    if (raw.routerResult.swapMode !== 'exactIn' || raw.routerResult.fromTokenAmount !== quote.assetAmount) {
-      throw new MainnetPreparationError('OKX swap is not exact-input or changed the input amount.');
-    }
-    if (!quote.routerPath || raw.routerResult.router !== quote.routerPath) {
-      throw new MainnetPreparationError('OKX swap route does not match the quote.');
-    }
-    if (quote.quoteId && raw.routerResult.quoteId !== quote.quoteId) throw new MainnetPreparationError('OKX swap quote ID does not match the accepted quote.');
+    // The official V6 Classic Swap schemas do not document quoteId as a cross-endpoint
+    // immutable identifier. Treat /swap's fresh routerResult as the executable quote.
+    this.validateQuoteResponse(raw.routerResult, quote.asset, quote.stablecoin, quote.assetAmount);
     if (transaction.slippagePercent !== quote.slippagePercent) throw new MainnetPreparationError('OKX swap slippage does not match the quote.');
     if (transaction.value !== '0') throw new MainnetPreparationError('OKX swap unexpectedly sends native OKB.');
+    const invoiceAmount = BigInt(quote.invoiceStablecoinAmount);
+    const swapSlippageFloor = minimumAfterSlippage(raw.routerResult.toTokenAmount, quote.slippagePercent);
+    const requiredSwapMinimum = swapSlippageFloor > invoiceAmount ? swapSlippageFloor : invoiceAmount;
     if (!/^\d+$/.test(transaction.minReceiveAmount)
-      || BigInt(transaction.minReceiveAmount) < BigInt(quote.minReceiveAmount)
+      || BigInt(transaction.minReceiveAmount) < requiredSwapMinimum
       || BigInt(transaction.minReceiveAmount) > BigInt(raw.routerResult.toTokenAmount)
-      || BigInt(raw.routerResult.toTokenAmount) < BigInt(quote.invoiceStablecoinAmount)) {
+      || BigInt(raw.routerResult.toTokenAmount) < invoiceAmount) {
       throw new MainnetPreparationError('OKX swap minimum receive amount is invalid.');
     }
-    if (raw.routerResult.toTokenAmount !== quote.quotedStablecoinAmount) {
-      throw new MainnetPreparationError('OKX swap output changed from the accepted quote.');
-    }
+    const route = canonicalRouteEvidence(raw.routerResult, quote.asset, quote.stablecoin);
     let receiver: Address;
     let baseRequest: BaseRequest;
     try {
@@ -447,7 +727,7 @@ export class OKXDEXMainnetAdapter {
       throw new MainnetPreparationError('OKX swap calldata tokens, amount, or minimum receive do not match the quote.');
     }
     if (baseRequest.deadLine <= BigInt(Math.floor(this.now().getTime() / 1000))) throw new MainnetPreparationError('OKX swap calldata deadline has expired.');
-    return transaction;
+    return { ...transaction, deadline: baseRequest.deadLine, route };
   }
 
   private assertFreshQuote(quote: MainnetQuote): void {

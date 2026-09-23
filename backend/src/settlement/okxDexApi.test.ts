@@ -14,7 +14,7 @@ describe('OkxDexApiClient', () => {
         requestUrl = String(input);
         requestHeaders = new Headers(init?.headers);
         redirect = init?.redirect;
-        return new Response(JSON.stringify({ code: '0', msg: '', data: [{ chainIndex: '196' }] }), { status: 200 });
+        return new Response(JSON.stringify({ code: '0', msg: '', data: [{ chainIndex: '196', chainName: 'X Layer', dexTokenApproveAddress: '0x1111111111111111111111111111111111111111', futureField: { ignored: true } }] }), { status: 200 });
       },
       now: () => new Date('2026-09-21T00:00:00.000Z'),
     });
