@@ -81,7 +81,10 @@ as $$
 declare
   preparation public.mainnet_preparations%rowtype;
 begin
-  if p_chain_id <> 196 or p_transaction_hash !~ '^0x[0-9a-fA-F]{64}$' then
+  if p_chain_id is distinct from 196
+    or p_transaction_hash is null
+    or p_transaction_hash !~ '^0x[0-9a-fA-F]{64}$'
+    or p_evidence is null then
     return false;
   end if;
 
@@ -90,24 +93,30 @@ begin
     where id = p_preparation_id
     for share;
   if not found
-    or preparation.invoice_id <> p_invoice_id
-    or preparation.chain_id <> p_chain_id
-    or lower(p_evidence->>'buyer') <> lower(preparation.buyer_address)
-    or lower(p_evidence->>'merchant') <> lower(preparation.merchant_address)
-    or lower(p_evidence->>'inputToken') <> lower(preparation.input_token)
-    or lower(p_evidence->>'outputToken') <> lower(preparation.output_token)
-    or p_evidence->>'inputAmount' <> preparation.exact_input_amount
-    or case
-      when p_evidence->>'outputAmount' ~ '^[1-9][0-9]*$'
-        and char_length(p_evidence->>'outputAmount') <= 78
-        then (p_evidence->>'outputAmount')::numeric < greatest(preparation.minimum_receive::numeric, preparation.stablecoin_invoice_amount::numeric)
-      else true
-    end
-    or lower(p_evidence->>'router') <> lower(preparation.router_address)
-    or p_evidence->>'builderCode' <> preparation.builder_code
-    or lower(p_evidence->>'builderPayout') <> lower(preparation.builder_payout_address)
-    or p_evidence->>'blockHash' !~ '^0x[0-9a-fA-F]{64}$'
-    or p_evidence->>'blockNumber' !~ '^(0|[1-9][0-9]*)$' then
+    or preparation.invoice_id is distinct from p_invoice_id
+    or preparation.chain_id is distinct from p_chain_id
+    or lower(p_evidence->>'buyer') is distinct from lower(preparation.buyer_address)
+    or lower(p_evidence->>'merchant') is distinct from lower(preparation.merchant_address)
+    or lower(p_evidence->>'inputToken') is distinct from lower(preparation.input_token)
+    or lower(p_evidence->>'outputToken') is distinct from lower(preparation.output_token)
+    or p_evidence->>'inputAmount' is distinct from preparation.exact_input_amount
+    or lower(p_evidence->>'router') is distinct from lower(preparation.router_address)
+    or p_evidence->>'builderCode' is distinct from preparation.builder_code
+    or lower(p_evidence->>'builderPayout') is distinct from lower(preparation.builder_payout_address)
+    or coalesce(p_evidence->>'blockHash', '') !~ '^0x[0-9a-fA-F]{64}$'
+    or coalesce(p_evidence->>'blockNumber', '') !~ '^(0|[1-9][0-9]*)$' then
+    return false;
+  end if;
+
+  if coalesce(p_evidence->>'outputAmount', '') !~ '^[1-9][0-9]*$'
+    or char_length(p_evidence->>'outputAmount') > 78 then
+    return false;
+  end if;
+
+  if (p_evidence->>'outputAmount')::numeric < greatest(
+    preparation.minimum_receive::numeric,
+    preparation.stablecoin_invoice_amount::numeric
+  ) then
     return false;
   end if;
 
