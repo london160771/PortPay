@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import type { Address } from 'viem';
+import { formatUnits } from 'viem';
 import {
   useAccount,
   useConnect,
@@ -7,6 +8,7 @@ import {
   usePublicClient,
   useReadContract,
   useSwitchChain,
+  useSendTransaction,
   useWriteContract,
 } from 'wagmi';
 import {
@@ -18,11 +20,13 @@ import {
   getMerchantInvoices,
   getMerchantPaymentHistory,
   reconcileInvoicePayment,
+  prepareMainnetApproval,
   type Invoice,
+  type MainnetApprovalPreparation,
   type SettlementQuote,
 } from './config/api';
 import { erc20BalanceAbi, formatTokenBalance, parseConfiguredAddress, portfolioAssets, testnetAssets } from './config/assets';
-import { portPayNetworkConfig, xLayerTestnet } from './config/network';
+import { mainnetNetworkConfig, portPayNetworkConfig, xLayerMainnet, xLayerTestnet } from './config/network';
 import { invoiceStatusLabel, paymentStatusLabel, paymentSuccessLabel, readInvoiceRoute, showBuyerSelectionDetails, type InvoiceRoute } from './config/invoice';
 import {
   formatPaymentTimestamp,
@@ -51,6 +55,7 @@ import {
   portPayBuilderCode,
   readBuilderCodePayoutAddress,
 } from './config/builderCodes';
+import { validatePreparedMainnetApproval } from './config/mainnetApproval';
 
 
 type TokenBalanceCardProps = {
@@ -1202,7 +1207,183 @@ function BuyerWalletPanel({
   );
 }
 
-function BuyerCheckoutPage({ invoiceId, onBack, onOpenBuyerInvoice }: { invoiceId: string; onBack: () => void; onOpenBuyerInvoice: (invoiceId: string) => void }) {
+function MainnetApprovalPanel({ invoice }: { invoice: Invoice }) {
+  const { address, chainId, isConnected } = useAccount();
+  const { connect, error: connectError, isPending: isConnecting } = useConnect();
+  const { switchChain, error: switchError, isPending: isSwitching } = useSwitchChain();
+  const { sendTransactionAsync, isPending: isWalletPromptOpen } = useSendTransaction();
+  const publicClient = usePublicClient({ chainId: xLayerMainnet.id });
+  const [preflight, setPreflight] = useState<{ status: string; reason: string; preparation?: MainnetApprovalPreparation } | null>(null);
+  const [isPreparing, setIsPreparing] = useState(false);
+  const [isConfirmingApproval, setIsConfirmingApproval] = useState(false);
+  const [preparationError, setPreparationError] = useState('');
+  const [approvalError, setApprovalError] = useState('');
+  const [approvalHash, setApprovalHash] = useState<`0x${string}` | null>(null);
+  const [confirmedAmount, setConfirmedAmount] = useState<string | null>(null);
+
+  async function refreshPreparation() {
+    if (!address || chainId !== xLayerMainnet.id || invoice.status !== 'pending') return;
+    setIsPreparing(true);
+    setPreparationError('');
+    setApprovalError('');
+    setApprovalHash(null);
+    setConfirmedAmount(null);
+    try {
+      setPreflight(await prepareMainnetApproval(invoice.id, address));
+    } catch (error) {
+      setPreflight(null);
+      setPreparationError(error instanceof ApiError ? error.message : 'Unable to prepare a mainnet approval.');
+    } finally {
+      setIsPreparing(false);
+    }
+  }
+
+  useEffect(() => {
+    let active = true;
+    if (!isConnected || !address || chainId !== xLayerMainnet.id || invoice.status !== 'pending') {
+      setPreflight(null);
+      setPreparationError('');
+      return () => { active = false; };
+    }
+    setIsPreparing(true);
+    setPreparationError('');
+    setApprovalError('');
+    setApprovalHash(null);
+    setConfirmedAmount(null);
+    prepareMainnetApproval(invoice.id, address)
+      .then((result) => { if (active) setPreflight(result); })
+      .catch((error: unknown) => {
+        if (active) {
+          setPreflight(null);
+          setPreparationError(error instanceof ApiError ? error.message : 'Unable to prepare a mainnet approval.');
+        }
+      })
+      .finally(() => { if (active) setIsPreparing(false); });
+    return () => { active = false; };
+  }, [address, chainId, invoice.id, invoice.status, isConnected]);
+
+  async function approvePreparedAmount() {
+    const preparation = preflight?.preparation;
+    if (!address || !publicClient || !preparation) {
+      setApprovalError('A fresh backend-prepared approval and connected buyer wallet are required.');
+      return;
+    }
+    const validationError = validatePreparedMainnetApproval(preparation, invoice, address, chainId);
+    if (validationError) {
+      setApprovalError(validationError);
+      return;
+    }
+
+    try {
+      const rpcChainId = await publicClient.getChainId();
+      if (rpcChainId !== 196 || chainId !== 196) throw new Error('The wallet and X Layer RPC must both report chain 196.');
+      const currentAllowance = await publicClient.readContract({
+        address: preparation.token,
+        abi: erc20BalanceAbi,
+        functionName: 'allowance',
+        args: [address, preparation.spender],
+      });
+      if (currentAllowance === BigInt(preparation.amount)) {
+        setConfirmedAmount(preparation.amount);
+        setApprovalError('');
+        return;
+      }
+      if (Date.parse(preparation.expiresAt) <= Date.now()) throw new Error('This approval preparation expired. Refresh it before signing.');
+
+      setApprovalError('');
+      setIsConfirmingApproval(true);
+      const hash = await sendTransactionAsync({
+        account: address,
+        to: preparation.token,
+        data: preparation.attributedApprovalCalldata,
+        value: 0n,
+        chainId: xLayerMainnet.id,
+      });
+      setApprovalHash(hash);
+      const receipt = await publicClient.waitForTransactionReceipt({ hash });
+      if (receipt.status !== 'success') throw new Error('The exact wNVDAx approval transaction reverted.');
+      const confirmedAllowance = await publicClient.readContract({
+        address: preparation.token,
+        abi: erc20BalanceAbi,
+        functionName: 'allowance',
+        args: [address, preparation.spender],
+      });
+      if (confirmedAllowance !== BigInt(preparation.amount)) throw new Error('The confirmed allowance does not exactly match the prepared amount.');
+      setConfirmedAmount(preparation.amount);
+    } catch (error) {
+      setApprovalError(error instanceof Error ? error.message : 'The approval could not be confirmed.');
+    } finally {
+      setIsConfirmingApproval(false);
+    }
+  }
+
+  const explorerUrl = approvalHash ? `${mainnetNetworkConfig.explorerUrl}/tx/${approvalHash}` : '';
+  const preparedValidationError = preflight?.preparation && address
+    ? validatePreparedMainnetApproval(preflight.preparation, invoice, address, chainId)
+    : 'A fresh preparation for the connected buyer is required.';
+
+  return (
+    <section className="mt-5 rounded-2xl border border-ink/10 bg-cloud p-5">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-amber-800">Mainnet payment · approval only</p>
+          <p className="mt-1 text-sm leading-6 text-ink/65">PortPay will prepare a fresh exact approval. You must confirm it in OKX Wallet. No swap is available from this checkout.</p>
+        </div>
+        <span className="rounded-full bg-amber-100 px-3 py-1.5 text-[10px] font-bold uppercase tracking-[0.12em] text-amber-950">X Layer · 196</span>
+      </div>
+
+      {!isConnected ? (
+        <button type="button" className="mt-5 rounded-xl bg-ink px-4 py-3 text-sm font-bold text-white disabled:opacity-50" onClick={() => connect({ connector: okxWalletConnector })} disabled={isConnecting}>
+          {isConnecting ? 'Opening OKX Wallet…' : 'Connect OKX Wallet'}
+        </button>
+      ) : chainId !== xLayerMainnet.id ? (
+        <div className="mt-4 rounded-xl border border-amber-200 bg-white p-4">
+          <p className="text-sm font-semibold">Switch to X Layer Mainnet (196) to continue.</p>
+          <button type="button" className="mt-3 rounded-lg bg-amber-200 px-4 py-2.5 text-sm font-bold text-amber-950 disabled:opacity-50" onClick={() => switchChain({ chainId: xLayerMainnet.id })} disabled={isSwitching}>
+            {isSwitching ? 'Switching network…' : 'Switch to X Layer Mainnet'}
+          </button>
+          {switchError ? <p className="mt-2 text-xs text-rose-700">{switchError.message}</p> : null}
+        </div>
+      ) : (
+        <div className="mt-4">
+          {isPreparing ? <p className="rounded-xl bg-white p-4 text-sm text-ink/60">Preparing and validating the exact approval with PortPay’s authenticated mainnet adapter…</p> : null}
+          {preparationError ? <p className="rounded-xl border border-rose-200 bg-rose-50 p-4 text-sm text-rose-800">{preparationError}</p> : null}
+          {preflight && !isPreparing ? (
+            <div className="rounded-xl border border-ink/10 bg-white p-4">
+              <p className="text-sm font-semibold">{confirmedAmount ? 'Approval confirmed' : preflight.status === 'APPROVAL_REQUIRED' ? 'Exact approval required' : preflight.status === 'READY' ? 'Exact allowance confirmed' : 'Mainnet preflight blocked'}</p>
+              <p className="mt-1 text-sm leading-6 text-ink/60">{confirmedAmount ? 'The exact allowance is onchain. Continue only after a separate fresh final preflight; PortPay will not swap automatically.' : preflight.reason}</p>
+              {preflight.preparation && preparedValidationError ? <p className="mt-3 text-sm text-rose-700">{preparedValidationError}</p> : null}
+              {preflight.preparation && !preparedValidationError && !confirmedAmount ? (
+                <dl className="mt-4 grid gap-2 text-xs sm:grid-cols-2">
+                  <div><dt className="text-ink/45">Asset / exact amount</dt><dd className="mt-0.5 font-semibold">wNVDAx · {formatUnits(BigInt(preflight.preparation.amount), 18)}</dd></div>
+                  <div><dt className="text-ink/45">Minimum merchant receive</dt><dd className="mt-0.5 font-semibold">{formatUnits(BigInt(preflight.preparation.minimumReceive), 6)} USD₮0</dd></div>
+                  <div><dt className="text-ink/45">Spender from prepared quote</dt><dd className="mt-0.5 break-all font-mono">{preflight.preparation.spender}</dd></div>
+                  <div><dt className="text-ink/45">Preparation expires</dt><dd className="mt-0.5">{new Date(preflight.preparation.expiresAt).toLocaleTimeString()}</dd></div>
+                  <div><dt className="text-ink/45">Preparation ID</dt><dd className="mt-0.5 break-all font-mono">{preflight.preparation.preparationId}</dd></div>
+                </dl>
+              ) : null}
+              {preflight.preparation && !preparedValidationError && !confirmedAmount ? (
+                <button type="button" className="mt-4 rounded-xl bg-ink px-4 py-3 text-sm font-bold text-white disabled:cursor-wait disabled:opacity-50" onClick={() => void approvePreparedAmount()} disabled={isConfirmingApproval || isWalletPromptOpen}>
+                  {isWalletPromptOpen ? 'Confirm exact approval in OKX Wallet…' : isConfirmingApproval ? 'Approval pending…' : `Approve ${formatUnits(BigInt(preflight.preparation.amount), 18)} wNVDAx`}
+                </button>
+              ) : null}
+              {approvalHash ? <p className="mt-3 text-xs text-ink/65">Approval transaction: <a className="font-mono font-semibold underline" href={explorerUrl} target="_blank" rel="noreferrer">{approvalHash}</a></p> : null}
+              {confirmedAmount ? <p className="mt-3 text-sm font-semibold text-emerald-800">Ready for final preflight · exact allowance {formatUnits(BigInt(confirmedAmount), 18)} wNVDAx confirmed.</p> : null}
+              {approvalError ? <p className="mt-3 text-sm text-rose-700">{approvalError}</p> : null}
+            </div>
+          ) : null}
+          <button type="button" className="mt-3 text-sm font-semibold text-ink/60 underline underline-offset-4 disabled:opacity-50" onClick={() => void refreshPreparation()} disabled={isPreparing || isConfirmingApproval || isWalletPromptOpen}>
+            {preflight ? 'Refresh mainnet preparation' : 'Retry mainnet preparation'}
+          </button>
+        </div>
+      )}
+      {connectError ? <p className="mt-3 text-sm text-rose-700">{connectError.message}</p> : null}
+      <p className="mt-4 text-xs leading-5 text-ink/45">Mainnet token: {mainnetNetworkConfig.wNvdaAddress} · Chain 1952 testnet checkout remains separate and unchanged.</p>
+    </section>
+  );
+}
+
+function BuyerCheckoutPage({ invoiceId, paymentNetwork, onBack, onOpenBuyerInvoice }: { invoiceId: string; paymentNetwork: 'testnet' | 'mainnet'; onBack: () => void; onOpenBuyerInvoice: (invoiceId: string) => void }) {
   const { address, chainId, isConnected } = useAccount();
   const [invoice, setInvoice] = useState<Invoice | null>(null);
   const [isLoading, setIsLoading] = useState(Boolean(invoiceId));
@@ -1265,8 +1446,10 @@ function BuyerCheckoutPage({ invoiceId, onBack, onOpenBuyerInvoice }: { invoiceI
         ) : invoice ? (
           <div className="pt-8">
             <div className="flex flex-wrap items-center justify-between gap-3">
-              <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-ink/45">PortPay checkout · Step 2 of 3</p>
-              <InvoiceStatusPill status={invoice.status} label={invoice.status === 'paid' ? 'Payment confirmed' : undefined} />
+              <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-ink/45">{paymentNetwork === 'mainnet' ? 'PortPay checkout · Mainnet approval-only' : 'PortPay checkout · Step 2 of 3'}</p>
+              {paymentNetwork === 'mainnet'
+                ? <span className="rounded-full bg-amber-100 px-3 py-1 text-[10px] font-bold uppercase tracking-[0.12em] text-amber-950">X Layer Mainnet · 196</span>
+                : <InvoiceStatusPill status={invoice.status} label={invoice.status === 'paid' ? 'Payment confirmed' : undefined} />}
             </div>
             <div className="mt-6 grid gap-5 lg:grid-cols-[1fr_auto] lg:items-end">
               <div>
@@ -1279,27 +1462,32 @@ function BuyerCheckoutPage({ invoiceId, onBack, onOpenBuyerInvoice }: { invoiceI
               </div>
             </div>
 
-            <div className={`mt-8 rounded-2xl p-5 ${invoice.status === 'paid' ? 'border border-emerald-200 bg-emerald-50' : 'border border-ink/10 bg-cloud'}`}>
+            <div className={`mt-8 rounded-2xl p-5 ${paymentNetwork === 'testnet' && invoice.status === 'paid' ? 'border border-emerald-200 bg-emerald-50' : 'border border-ink/10 bg-cloud'}`}>
               <div className="flex items-center gap-3">
-                <span className={`grid h-8 w-8 place-items-center rounded-full text-sm font-bold ${invoice.status === 'paid' ? 'bg-emerald-600 text-white' : 'bg-amber-200 text-amber-950'}`}>
-                  {invoice.status === 'paid' ? '✓' : '…'}
+                <span className={`grid h-8 w-8 place-items-center rounded-full text-sm font-bold ${paymentNetwork === 'testnet' && invoice.status === 'paid' ? 'bg-emerald-600 text-white' : 'bg-amber-200 text-amber-950'}`}>
+                  {paymentNetwork === 'testnet' && invoice.status === 'paid' ? '✓' : '…'}
                 </span>
-                <p className="text-sm font-semibold">{paymentStatusLabel('buyer', invoice.status)}</p>
+                <p className="text-sm font-semibold">{paymentNetwork === 'mainnet' ? invoice.status === 'pending' ? 'Mainnet approval preparation' : 'Mainnet checkout unavailable' : paymentStatusLabel('buyer', invoice.status)}</p>
               </div>
               <p className="mt-2 text-sm leading-6 text-ink/55">
-                {invoice.status === 'paid'
-                  ? 'This status is read from a confirmed PortPay settlement event on X Layer Testnet.'
-                  : 'Review the exact quote below, then approve the selected demo asset and confirm payment in OKX Wallet.'}
+                {paymentNetwork === 'mainnet'
+                  ? invoice.status === 'pending'
+                    ? 'This opt-in path prepares one exact wNVDAx approval on X Layer Mainnet. It does not execute a swap or mark the invoice paid.'
+                    : 'The stored paid status belongs to the existing testnet invoice flow. Mainnet approval is unavailable and no mainnet payment is inferred.'
+                  : invoice.status === 'paid'
+                    ? 'This status is read from a confirmed PortPay settlement event on X Layer Testnet.'
+                    : 'Review the exact quote below, then approve the selected demo asset and confirm payment in OKX Wallet.'}
               </p>
             </div>
 
-            {invoice.status === 'pending' ? <BuyerWalletPanel invoice={invoice} onPaid={setInvoice} /> : null}
+            {invoice.status === 'pending' && paymentNetwork === 'mainnet' ? <MainnetApprovalPanel invoice={invoice} /> : null}
+            {invoice.status === 'pending' && paymentNetwork === 'testnet' ? <BuyerWalletPanel invoice={invoice} onPaid={setInvoice} /> : null}
 
-            {invoice.status === 'paid' ? (
+            {invoice.status === 'paid' && paymentNetwork === 'testnet' ? (
               <PaymentReceipt invoice={invoice} role="buyer" />
             ) : null}
 
-            {invoice.status === 'paid' ? (
+            {invoice.status === 'paid' && paymentNetwork === 'testnet' ? (
               <PaymentHistoryPanel
                 address={address}
                 canRead={isConnected && chainId === xLayerTestnet.id && Boolean(address)}
@@ -1315,14 +1503,14 @@ function BuyerCheckoutPage({ invoiceId, onBack, onOpenBuyerInvoice }: { invoiceI
               </div>
               <div className="flex justify-between gap-4">
                 <dt className="text-ink/45">Network</dt>
-                <dd>X Layer Testnet · 1952</dd>
+                <dd>{paymentNetwork === 'mainnet' ? 'X Layer Mainnet · 196' : 'X Layer Testnet · 1952'}</dd>
               </div>
               <div className="flex justify-between gap-4">
                 <dt className="text-ink/45">Invoice ID</dt>
                 <dd className="max-w-[16rem] break-all text-right font-mono text-xs">{invoice.id}</dd>
               </div>
             </dl>
-            <p className="mt-6 text-center text-xs leading-5 text-ink/40">Testnet demonstration · Demo portfolio assets are not backed by real shares.</p>
+            <p className="mt-6 text-center text-xs leading-5 text-ink/40">{paymentNetwork === 'mainnet' ? 'Mainnet approval only · final swap remains disabled.' : 'Testnet demonstration · Demo portfolio assets are not backed by real shares.'}</p>
           </div>
         ) : null}
       </div>
@@ -1758,10 +1946,10 @@ function BuilderCodeDebugPage() {
 }
 
 export default function App() {
-  const [route, setRoute] = useState<InvoiceRoute>(() => readInvoiceRoute(window.location.pathname));
+  const [route, setRoute] = useState<InvoiceRoute>(() => readInvoiceRoute(window.location.pathname, window.location.search));
 
   useEffect(() => {
-    const onPopState = () => setRoute(readInvoiceRoute(window.location.pathname));
+    const onPopState = () => setRoute(readInvoiceRoute(window.location.pathname, window.location.search));
     window.addEventListener('popstate', onPopState);
     return () => window.removeEventListener('popstate', onPopState);
   }, []);
@@ -1773,7 +1961,7 @@ export default function App() {
 
   function openBuyerInvoice(invoiceId: string) {
     window.history.pushState({}, '', `/pay/${encodeURIComponent(invoiceId)}`);
-    setRoute({ type: 'pay', invoiceId });
+    setRoute({ type: 'pay', invoiceId, paymentNetwork: 'testnet' });
   }
 
   function openDashboard() {
@@ -1790,7 +1978,7 @@ export default function App() {
       ) : route.type === 'merchantInvoice' ? (
         <MerchantInvoicePage invoiceId={route.invoiceId} onBack={openDashboard} />
       ) : route.type === 'pay' ? (
-        <BuyerCheckoutPage invoiceId={route.invoiceId} onBack={openDashboard} onOpenBuyerInvoice={openBuyerInvoice} />
+        <BuyerCheckoutPage invoiceId={route.invoiceId} paymentNetwork={route.paymentNetwork} onBack={openDashboard} onOpenBuyerInvoice={openBuyerInvoice} />
       ) : (
         <MerchantDashboard onOpenMerchantInvoice={openMerchantInvoice} />
       )}

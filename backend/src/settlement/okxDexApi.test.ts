@@ -34,7 +34,7 @@ describe('OkxDexApiClient', () => {
     await expect(client.getSupportedChains()).rejects.toThrow('OKX_DEX_API_KEY is required');
   });
 
-  it('rejects malformed authenticated API response data before the adapter can use it', async () => {
+  it('accepts a numeric supported-chain index and normalizes it to a string', async () => {
     const client = new OkxDexApiClient({
       apiKey: 'key',
       passphrase: 'passphrase',
@@ -43,6 +43,31 @@ describe('OkxDexApiClient', () => {
         code: '0',
         msg: '',
         data: [{ chainIndex: 196 }],
+      }), { status: 200 }),
+    });
+    await expect(client.getSupportedChains()).resolves.toEqual(['196']);
+  });
+
+  it.each([
+    ['fractional number', 196.5],
+    ['negative number', -196],
+    ['negative string', '-196'],
+    ['malformed string', '19x'],
+    ['decimal string', '196.0'],
+    ['empty string', ''],
+    ['null', null],
+    ['array', []],
+    ['object', {}],
+    ['boolean', true],
+  ])('rejects malformed supported-chain index (%s)', async (_label, chainIndex) => {
+    const client = new OkxDexApiClient({
+      apiKey: 'key',
+      passphrase: 'passphrase',
+      secretKey: 'secret',
+      fetchFn: async () => new Response(JSON.stringify({
+        code: '0',
+        msg: '',
+        data: [{ chainIndex }],
       }), { status: 200 }),
     });
     await expect(client.getSupportedChains()).rejects.toThrow('invalid chain payload');

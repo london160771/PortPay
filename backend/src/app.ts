@@ -32,9 +32,12 @@ import {
 } from './settlement/types.js';
 import type { SettlementAdapter } from './settlement/types.js';
 import { deliverPaymentConfirmedWebhook } from './integration/webhook.js';
+import { createMainnetApprovalPreparationService } from './settlement/mainnetApprovalPreparation.js';
+import type { MainnetApprovalPreparationService } from './settlement/mainnetApprovalPreparation.js';
 
 type AppOptions = {
   merchantAuth?: MerchantAuthConfig;
+  mainnetApprovalPreparation?: MainnetApprovalPreparationService;
   webhookDelivery?: (invoice: Invoice, credential: MerchantCredential) => Promise<void>;
 };
 
@@ -176,6 +179,37 @@ export function createApp(
     }
   });
 
+  app.post('/api/invoices/:invoiceId/mainnet/approval-preparation', async (request, response, next) => {
+    let invoiceId: string;
+    let invoice: Invoice | null;
+    let buyerAddress: `0x${string}`;
+    try {
+      invoiceId = validateInvoiceId(request.params.invoiceId);
+      invoice = await invoiceRepository.findById(invoiceId);
+      buyerAddress = validateWalletAddress(request.body?.buyerAddress, 'Buyer wallet') as `0x${string}`;
+    } catch (error) {
+      next(error);
+      return;
+    }
+    if (!invoice) {
+      response.status(404).json({ error: 'Invoice not found.' });
+      return;
+    }
+    if (invoice.status !== 'pending') {
+      response.status(409).json({ error: 'Only a pending invoice can be used to prepare a mainnet approval.' });
+      return;
+    }
+    if (!options.mainnetApprovalPreparation) {
+      response.status(503).json({ error: 'Mainnet approval preparation is not configured.' });
+      return;
+    }
+    try {
+      response.json(await options.mainnetApprovalPreparation(invoice, buyerAddress));
+    } catch {
+      response.status(503).json({ error: 'A safe mainnet approval preparation could not be produced. Check mainnet RPC, OKX, Builder Code, and Supabase configuration.' });
+    }
+  });
+
   app.post('/api/invoices/:invoiceId/reconcile', async (request, response, next) => {
     try {
       const invoiceId = validateInvoiceId(request.params.invoiceId);
@@ -298,4 +332,6 @@ export function createApp(
   return app;
 }
 
-export const app = createApp();
+export const app = createApp(undefined, undefined, {
+  mainnetApprovalPreparation: createMainnetApprovalPreparationService(),
+});

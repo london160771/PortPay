@@ -1,7 +1,7 @@
 import { http, createConfig } from 'wagmi';
 import { injected } from 'wagmi/connectors';
 import type { EIP1193Provider } from 'viem';
-import { xLayerTestnet } from './network';
+import { xLayerMainnet, xLayerTestnet } from './network';
 
 type OkxProvider = EIP1193Provider & {
   isOkxWallet?: true;
@@ -37,9 +37,10 @@ export const okxWalletConnector = injected({
 });
 
 export const wagmiConfig = createConfig({
-  chains: [xLayerTestnet],
+  chains: [xLayerTestnet, xLayerMainnet],
   connectors: [okxWalletConnector],
   transports: {
     [xLayerTestnet.id]: http(xLayerTestnet.rpcUrls.default.http[0]),
+    [xLayerMainnet.id]: http(xLayerMainnet.rpcUrls.default.http[0]),
   },
 });

@@ -4,9 +4,11 @@ import { resolveBackendUrl } from './api';
 
 describe('invoice link routing', () => {
   it('resolves a payment URL invoice ID and handles a missing ID', () => {
-    expect(readInvoiceRoute('/pay/123')).toEqual({ type: 'pay', invoiceId: '123' });
-    expect(readInvoiceRoute('/invoice/123')).toEqual({ type: 'pay', invoiceId: '123' });
-    expect(readInvoiceRoute('/pay/')).toEqual({ type: 'pay', invoiceId: '' });
+    expect(readInvoiceRoute('/pay/123')).toEqual({ type: 'pay', invoiceId: '123', paymentNetwork: 'testnet' });
+    expect(readInvoiceRoute('/invoice/123')).toEqual({ type: 'pay', invoiceId: '123', paymentNetwork: 'testnet' });
+    expect(readInvoiceRoute('/pay/123', '?network=mainnet')).toEqual({ type: 'pay', invoiceId: '123', paymentNetwork: 'mainnet' });
+    expect(readInvoiceRoute('/pay/123', '?network=unknown')).toEqual({ type: 'pay', invoiceId: '123', paymentNetwork: 'testnet' });
+    expect(readInvoiceRoute('/pay/')).toEqual({ type: 'pay', invoiceId: '', paymentNetwork: 'testnet' });
     expect(readInvoiceRoute('/merchant/invoices/123')).toEqual({ type: 'merchantInvoice', invoiceId: '123' });
     expect(readInvoiceRoute('/docs/merchant-integration')).toEqual({ type: 'docs', slug: 'merchant-integration' });
     expect(readInvoiceRoute('/merchant')).toEqual({ type: 'dashboard' });

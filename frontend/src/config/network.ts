@@ -2,8 +2,12 @@ import { defineChain } from 'viem';
 
 const DEFAULT_RPC_URL = 'https://testrpc.xlayer.tech/terigon';
 const DEFAULT_EXPLORER_URL = 'https://www.okx.com/web3/explorer/xlayer-test';
+const DEFAULT_MAINNET_RPC_URL = 'https://rpc.xlayer.tech';
+const DEFAULT_MAINNET_EXPLORER_URL = 'https://www.okx.com/web3/explorer/xlayer';
 export const VERIFIED_TESTNET_USDT0_ADDRESS =
   '0x9e29b3aada05bf2d2c827af80bd28dc0b9b4fb0c' as const;
+export const VERIFIED_MAINNET_WNVDA_ADDRESS = '0xa8ddb5cd96b5222afe198316e9a57caa642850d5' as const;
+export const VERIFIED_MAINNET_USDT0_ADDRESS = '0x779ded0c9e1022225f8e0630b35a9b54be713736' as const;
 
 export const xLayerTestnet = defineChain({
   id: 1952,
@@ -38,4 +42,24 @@ export const portPayNetworkConfig = {
   },
   settlementAddress: import.meta.env.VITE_PORTPAY_SETTLEMENT_ADDRESS || '',
   builderCode: import.meta.env.VITE_PORTPAY_BUILDER_CODE || '',
+} as const;
+
+export const xLayerMainnet = defineChain({
+  id: 196,
+  name: 'X Layer Mainnet',
+  nativeCurrency: { name: 'OKB', symbol: 'OKB', decimals: 18 },
+  rpcUrls: {
+    default: { http: [import.meta.env.VITE_X_LAYER_MAINNET_RPC_URL || DEFAULT_MAINNET_RPC_URL] },
+  },
+  blockExplorers: {
+    default: { name: 'OKX Explorer', url: import.meta.env.VITE_X_LAYER_MAINNET_EXPLORER_URL || DEFAULT_MAINNET_EXPLORER_URL },
+  },
+});
+
+export const mainnetNetworkConfig = {
+  chainId: xLayerMainnet.id,
+  rpcUrl: xLayerMainnet.rpcUrls.default.http[0],
+  explorerUrl: xLayerMainnet.blockExplorers.default.url,
+  wNvdaAddress: import.meta.env.VITE_MAINNET_WNVDA_ADDRESS || VERIFIED_MAINNET_WNVDA_ADDRESS,
+  usdt0Address: import.meta.env.VITE_MAINNET_USDT0_ADDRESS || VERIFIED_MAINNET_USDT0_ADDRESS,
 } as const;

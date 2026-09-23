@@ -3,6 +3,7 @@ import { createPublicClient, http, stringToHex, type Address, type Hex } from 'v
 import { portPayNetworkConfig, xLayerTestnet } from './network';
 
 export const portPayBuilderCode = portPayNetworkConfig.builderCode.trim();
+export const VERIFIED_TESTNET_BUILDER_CODE = 'kob1lkgsg6infkg3' as const;
 export const BUILDER_CODE_REGISTRY_ADDRESS = '0x33907e98d7392d95212b05ab03f091e02d7815bf' as const;
 export const EXPECTED_BUILDER_PAYOUT_ADDRESS = '0xbabdfef588cf57efcc7c8857960e3ccdd9167589' as const;
 export const builderCodeRegistryAbi = [{

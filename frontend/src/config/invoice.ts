@@ -3,10 +3,10 @@ import type { InvoiceStatus } from './api';
 export type InvoiceRoute =
   | { type: 'dashboard' }
   | { type: 'merchantInvoice'; invoiceId: string }
-  | { type: 'pay'; invoiceId: string }
+  | { type: 'pay'; invoiceId: string; paymentNetwork: 'testnet' | 'mainnet' }
   | { type: 'docs'; slug: 'index' | 'getting-started' | 'how-it-works' | 'merchant-integration' | 'testnet' };
 
-export function readInvoiceRoute(pathname: string): InvoiceRoute {
+export function readInvoiceRoute(pathname: string, search = ''): InvoiceRoute {
   if (pathname === '/' || pathname === '/merchant' || pathname === '/merchant/') return { type: 'dashboard' };
 
   const merchantMatch = pathname.match(/^\/merchant\/invoices(?:\/([^/]+))?\/?$/);
@@ -20,10 +20,15 @@ export function readInvoiceRoute(pathname: string): InvoiceRoute {
 
   const payMatch = pathname.match(/^\/(?:pay|invoice)(?:\/([^/]+))?\/?$/);
   if (payMatch) {
+    const paymentNetwork = new URLSearchParams(search).get('network') === 'mainnet' ? 'mainnet' : 'testnet';
     try {
-      return { type: 'pay', invoiceId: payMatch[1] ? decodeURIComponent(payMatch[1]) : '' };
+      return {
+        type: 'pay',
+        invoiceId: payMatch[1] ? decodeURIComponent(payMatch[1]) : '',
+        paymentNetwork,
+      };
     } catch {
-      return { type: 'pay', invoiceId: '' };
+      return { type: 'pay', invoiceId: '', paymentNetwork };
     }
   }
 

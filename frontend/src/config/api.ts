@@ -49,6 +49,34 @@ export type SettlementQuote = {
   expiresAt: string;
 };
 
+export type MainnetApprovalPreparation = {
+  preparationId: string;
+  preparationHash: `0x${string}`;
+  invoiceId: string;
+  buyer: `0x${string}`;
+  merchant: `0x${string}`;
+  chainId: 196;
+  token: `0x${string}`;
+  outputToken: `0x${string}`;
+  spender: `0x${string}`;
+  amount: string;
+  minimumReceive: string;
+  nativeValue: string;
+  approvalCalldata: `0x${string}`;
+  attributedApprovalCalldata: `0x${string}`;
+  dataSuffix: `0x${string}`;
+  builderCode: string;
+  expiresAt: string;
+  preparationBlockNumber: string;
+  snapshotAllowance: string;
+};
+
+export type MainnetApprovalPreparationResponse = {
+  status: string;
+  reason: string;
+  preparation?: MainnetApprovalPreparation;
+};
+
 export class ApiError extends Error {
   constructor(
     message: string,
@@ -129,6 +157,16 @@ export function createSettlementQuote(
   return request<{ quote: SettlementQuote }>(`/api/invoices/${encodeURIComponent(invoiceId)}/quote`, {
     method: 'POST',
     body: JSON.stringify({ buyerAddress, assetKey }),
+  });
+}
+
+export function prepareMainnetApproval(
+  invoiceId: string,
+  buyerAddress: string,
+): Promise<MainnetApprovalPreparationResponse> {
+  return request<MainnetApprovalPreparationResponse>(`/api/invoices/${encodeURIComponent(invoiceId)}/mainnet/approval-preparation`, {
+    method: 'POST',
+    body: JSON.stringify({ buyerAddress }),
   });
 }
 

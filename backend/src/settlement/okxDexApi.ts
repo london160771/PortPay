@@ -25,6 +25,12 @@ const isString = (value: unknown): value is string => typeof value === 'string';
 const isDigits = (value: unknown): value is string => isString(value) && /^\d+$/.test(value);
 const isHex = (value: unknown): value is `0x${string}` => isString(value) && /^0x(?:[0-9a-fA-F]{2})+$/.test(value);
 
+function normalizeSupportedChainIndex(value: unknown): string | undefined {
+  if (isDigits(value)) return value;
+  if (typeof value === 'number' && Number.isSafeInteger(value) && value >= 0) return String(value);
+  return undefined;
+}
+
 function requiredSecret(name: string, value: string | undefined): string {
   if (!value?.trim()) throw new OkxDexApiError(`${name} is required for the server-side OKX DEX client.`);
   return value.trim();
@@ -88,8 +94,9 @@ export class OkxDexApiClient {
   async getSupportedChains(): Promise<string[]> {
     const response = await this.get('/api/v6/dex/aggregator/supported/chain');
     return response.map((value) => {
-      if (!isRecord(value) || !isString(value.chainIndex)) throw new OkxDexApiError('The OKX DEX API returned an invalid chain payload.');
-      return value.chainIndex;
+      const chainIndex = isRecord(value) ? normalizeSupportedChainIndex(value.chainIndex) : undefined;
+      if (chainIndex === undefined) throw new OkxDexApiError('The OKX DEX API returned an invalid chain payload.');
+      return chainIndex;
     });
   }
 
