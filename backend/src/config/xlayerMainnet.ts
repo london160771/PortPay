@@ -29,6 +29,7 @@ export const mainnetAddressConfig = {
   wAapl: envValue('MAINNET_WAAPL_ADDRESS', VERIFIED_MAINNET_WAAPL_ADDRESS),
   usdt0: envValue('MAINNET_USDT0_ADDRESS', VERIFIED_MAINNET_USDT0_ADDRESS),
   builderCode: envValue('PORTPAY_MAINNET_BUILDER_CODE'),
+  builderPayoutAddress: envValue('PORTPAY_MAINNET_BUILDER_PAYOUT_ADDRESS'),
 } as const;
 
 export const mainnetOkxConfig = {

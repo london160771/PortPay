@@ -222,6 +222,10 @@ export class OKXDEXMainnetAdapter {
     return mainnetSupportedAssets.map((asset) => ({ ...asset }));
   }
 
+  getBuilderCode(): string | undefined {
+    return this.builderCode;
+  }
+
   async getQuote(request: MainnetQuoteRequest): Promise<MainnetQuote> {
     const invoice = request.invoice;
     if (invoice.status !== 'pending') throw new MainnetPreparationError('Only pending invoices can be quoted.');

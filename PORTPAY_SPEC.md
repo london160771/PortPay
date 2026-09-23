@@ -256,6 +256,26 @@ The optional mainnet proof is allowed only when all of the following are true:
 
 No mainnet money is required for the MVP. Do not make mainnet a hidden dependency of testnet development.
 
+### Mainnet Phase 2 — Builder Code registration, preflight, and receipt design
+
+Mainnet Phase 2 remains preparation-only and isolated from the proven testnet flow. It may add:
+
+- official mainnet Builder Code registration guidance and independent registry/payout verification;
+- a deterministic chain-196 preflight for prepared OKX approval and swap transactions;
+- read-only buyer asset, allowance, OKB gas, and merchant USD₮0 balance checks;
+- read-only `eth_call` simulation of the exact attributed approval and swap calldata;
+- a future mainnet receipt/reconciliation verifier and separate payment-state model.
+
+The official OKX Builder Codes documentation requires mainnet builders to use the OKX Developer Portal: connect the owning wallet, verify the address, and create the Builder Code. The documented `registerAuto` contract path is for X Layer Testnet registration; PortPay must not call it for mainnet. The official mainnet registry is `0xd6c426f9c077358735622ae5a83468dc0510823b`. PortPay converts the exact 16-character code to the deterministic registry token ID and reads `payoutAddress(uint256)` on chain `196`. A configured mainnet code is accepted only when its registry payout matches `PORTPAY_MAINNET_BUILDER_PAYOUT_ADDRESS`. `PORTPAY_MAINNET_BUILDER_CODE` remains empty until the user completes registration.
+
+Preflight must fail closed unless chain `196`, buyer, merchant, invoice, input/output tokens, exact input, minimum output, slippage, quote freshness, router, spender, approval calldata, swap calldata, zero native value, read-only balances, gas, simulations, and a verified mainnet Builder Code all pass. Read balances and token decimals at a pinned block and require 18 decimals for wNVDAx/wAAPLx and 6 for mainnet USD₮0. Stage A reads allowance at the pinned block first. Unless it equals the exact input amount, simulate only the exact attributed approval, validate any non-empty ERC-20 return data (`true` required), and return `APPROVAL_REQUIRED`; below, above, and unlimited allowances are all rejected, and no swap gas estimate or simulation runs. Stage B is reachable only when the pinned allowance equals the exact input; it estimates gas from the exact attributed approval and swap calldata, applies a 20% safety margin, simulates the exact swap, and evaluates OKB readiness. Persist immutable preparation evidence before any future wallet approval can be considered. `READY` is preparation-only and never authorizes a broadcast.
+
+The future mainnet receipt verifier must require exact byte-for-byte match between transaction input and persisted prepared attributed swap calldata; the configured code, persisted prepared code, and decoded receipt code must match exactly, and the registry payout must match. It must verify successful chain-196 receipt, buyer sender, prepared OKX router, canonical receipt and parent blocks, configured confirmation depth, exact balance deltas read at `receiptBlock - 1` and `receiptBlock`, input/output transfers meeting the invoice/minimum policy, quote/invoice binding, and a successful atomic repository claim. Database uniqueness must enforce one settlement per invoice and one use of `(chain_id, transaction_hash)`; a duplicate retry must not create a second paid result. Caller-supplied before-balances are never settlement authority. Frontend success state is never sufficient. Mainnet payment states are modeled separately as `pending`, `prepared`, `ready`, `submitted`, `confirming`, `paid`, `failed`, and `expired`; the existing testnet `pending`/`paid` behavior remains unchanged.
+
+The Phase 2 reconciliation migration is `backend/supabase/migrations/20260922000000_mainnet_phase2_reconciliation.sql`; it must be applied before any future mainnet reconciliation is used. Mainnet remains preparation-only and is not live-ready until all of these controls pass review, a separate mainnet Builder Code is registered and verified, and the migration is applied. No mainnet transaction is authorized by this phase.
+
+No mainnet wallet funding, approval, swap, registration transaction, deployment, private-key execution, write API, or transaction broadcast is permitted in this phase.
+
 ## 10. Environment variables and addresses
 
 The exact deployed addresses are configuration, not assumptions. Once known, they must be recorded in `README.md` and the appropriate environment example without secrets.
@@ -271,6 +291,10 @@ DEMO_AAPL_ADDRESS=
 DEMO_NVDA_ADDRESS=
 PORTPAY_SETTLEMENT_ADDRESS=
 PORTPAY_BUILDER_CODE=
+PORTPAY_MAINNET_BUILDER_CODE=
+PORTPAY_MAINNET_BUILDER_PAYOUT_ADDRESS=
+MAINNET_QUOTE_TTL_SECONDS=60
+MAINNET_CONFIRMATION_DEPTH=2
 DEMO_PRICE_SOURCE=
 DATABASE_URL=
 SUPABASE_URL=
@@ -398,6 +422,15 @@ Before any optional mainnet work, PortPay may complete a focused readiness pass 
 ### Mainnet Phase 1 — isolated adapter preparation
 
 The current mainnet implementation phase is preparation-only. It may add isolated chain-196 configuration, a server-side authenticated OKX V6 DEX API client, read-only quote/approval/swap transaction preparation, direct merchant-recipient validation, and ERC-8021 suffix preparation. It must not fund wallets, approve tokens, deploy contracts, register a mainnet Builder Code, broadcast transactions, or modify the proven testnet settlement path. Mainnet execution remains disabled until the adapter passes review and the user explicitly approves a live proof.
+
+### Mainnet Phase 2 — Builder Code registration, preflight, and receipt design
+
+- Document the official OKX Developer Portal registration steps without registering automatically.
+- Verify a future mainnet code and payout through `payoutAddress(uint256)` on the official chain-196 registry.
+- Run deterministic read-only preflight, exact calldata simulations, and balance/allowance/gas checks before any future wallet prompt.
+- Define canonical mainnet receipt/reconciliation checks and isolated payment states without changing testnet reconciliation.
+- Keep `PORTPAY_MAINNET_BUILDER_CODE` empty until a real mainnet code is registered and independently verified.
+- Keep mainnet execution, funding, approvals, swaps, deployments, write endpoints, and transactions disabled.
 
 ### Optional Phase 8 — Tiny mainnet proof
 

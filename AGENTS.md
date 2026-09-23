@@ -264,6 +264,24 @@ The current implementation boundary is a server-signed EIP-712 quote plus canoni
 - Do not modify `TestnetSettlementAdapter`, testnet addresses, or the proven testnet flow.
 - Do not enable live mainnet execution until the user explicitly approves it after the required Sol High review.
 
+### Mainnet Phase 2 — Builder Code registration, preflight, and receipt design
+
+- Keep `PORTPAY_MAINNET_BUILDER_CODE` and `PORTPAY_MAINNET_BUILDER_PAYOUT_ADDRESS` empty until the user completes the official OKX Developer Portal mainnet registration.
+- Document the manual portal flow: connect the owning wallet, verify the address, create the mainnet Builder Code, and record the generated code and payout address.
+- Do not call the testnet `registerAuto` flow for mainnet and never reuse `kob1lkgsg6infkg3`.
+- Verify the separate mainnet code by reading `payoutAddress(uint256)` from registry `0xd6c426f9c077358735622ae5a83468dc0510823b` on chain `196`; require an exact configured payout match.
+- Add only deterministic, read-only preflight for chain, invoice/quote binding, tokens, amounts, freshness, slippage, router, spender, calldata, recipient, native value, balances, allowance, OKB gas, Builder Code suffix, and `eth_call` simulations.
+- Persist immutable preparation evidence (invoice/quote, parties, chain/tokens/amounts, router/spender, exact attributed approval/swap calldata and hashes, Builder Code/payout, snapshot block, and expiry) before any future wallet approval can be considered.
+- Read balances and decimals at a pinned snapshot block; require 18 decimals for wNVDAx/wAAPLx and 6 for mainnet USD₮0. Stage A reads pinned allowance first. If it is not exactly the required input amount, simulate the exact attributed approval, validate non-empty ERC-20 return data is `true`, and return `APPROVAL_REQUIRED`; below, above, and unlimited allowances are rejected, and no swap gas estimate/simulation runs. Stage B is permitted only when pinned allowance equals the exact required amount; estimate gas from the exact attributed approval and swap calls, apply the documented 20% safety margin, simulate the exact swap, then evaluate OKB readiness.
+- Do not return mainnet preflight `READY` for any allowance other than exact equality with the quoted input amount. `READY` remains preparation-only and never authorizes broadcast.
+- Add a write-free future receipt/reconciliation verifier requiring exact persisted attributed calldata, matching configured/prepared/onchain Builder Code and payout, canonical adjacent before/receipt blocks, block-pinned exact buyer/merchant balance deltas, confirmation depth, and atomic repository-backed claims.
+- Enforce unique settlement per invoice and unique `(chain_id, transaction_hash)` with database constraints and one atomic claim. A duplicate/retried claim is non-mutating and must not produce a second `paid` result.
+- Keep mainnet receipts explicitly not live-ready until these controls, the migration, a registered mainnet Builder Code, and the required Sol High review are complete.
+- Model mainnet payment states separately (`pending`, `prepared`, `ready`, `submitted`, `confirming`, `paid`, `failed`, `expired`) without changing testnet invoice states.
+- Missing or unregistered mainnet Builder Code must never produce live-ready status.
+- Do not add private-key execution, wallet send methods, write API endpoints, transaction broadcast, funding, approval, swap, deployment, or any mainnet transaction.
+- Do not modify `TestnetSettlementAdapter`, chain-1952 addresses, testnet Builder Code, or testnet reconciliation.
+
 ### Optional Phase 8 — tiny mainnet proof
 
 - Only after the isolated Mainnet Phase 1 preparation, with explicit user approval, available funds, verified official xStock route, and completed pre-mainnet Sol High review.
