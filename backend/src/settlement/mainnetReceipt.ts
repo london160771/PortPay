@@ -37,6 +37,7 @@ export type MainnetReceiptVerification = {
   spentAsset: Address; spentAmount: string; stablecoin: Address; stablecoinReceived: string;
   router: Address; blockNumber: string; blockHash: Hex; confirmationDepth: number;
   builderCode: string; builderCodeCheck: MainnetBuilderCodeCheck; canonical: true; balanceEvidence: MainnetBalanceEvidence;
+  claimDisposition: 'claimed' | 'already_paid';
 };
 
 export type MainnetReceiptVerifierOptions = {
@@ -84,10 +85,10 @@ function confirmationDepth(value: number | undefined): number {
   return configured;
 }
 
-function validatePersistedEvidence(evidence: MainnetPreparationEvidence, invoice: Invoice): {
+export function validatePersistedMainnetPreparation(evidence: MainnetPreparationEvidence, invoice: Invoice): {
   buyer: Address; merchant: Address; asset: Address; stablecoin: Address; router: Address; input: bigint; minimumOutput: bigint; invoiceOutput: bigint;
 } {
-  if (evidence.chainId !== 196 || evidence.invoiceId !== invoice.id || evidence.quote.invoiceId !== invoice.id) fail('INVALID_PREPARATION', 'Persisted preparation is not bound to this chain and invoice.');
+  if (invoice.paymentNetwork !== 'x-layer-mainnet' || evidence.chainId !== 196 || evidence.invoiceId !== invoice.id || evidence.quote.invoiceId !== invoice.id) fail('INVALID_PREPARATION', 'Persisted preparation is not bound to a chain-196 invoice.');
   const buyer = normalizeAddress(evidence.buyer, 'Persisted buyer');
   const merchant = normalizeAddress(evidence.merchant, 'Persisted merchant');
   const asset = normalizeAddress(evidence.inputToken, 'Persisted input token');
@@ -117,7 +118,8 @@ function validatePersistedEvidence(evidence: MainnetPreparationEvidence, invoice
     || !execution || execution.invoiceId !== invoice.id || execution.chainId !== 196
     || !sameAddress(execution.buyer, buyer) || !sameAddress(execution.merchant, merchant)
     || !sameAddress(execution.inputToken, asset) || !sameAddress(execution.outputToken, stablecoin)
-    || execution.exactInputAmount !== evidence.exactInputAmount || execution.expectedOutputAmount !== evidence.expectedOutput
+    || execution.exactInputAmount !== evidence.exactInputAmount || execution.inputConsumptionMode !== evidence.inputConsumptionMode
+    || evidence.inputConsumptionMode !== 'exact-in-max-debit-net-observed' || execution.expectedOutputAmount !== evidence.expectedOutput
     || execution.authenticatedResponseHash !== evidence.authenticatedSwapResponseHash
     || execution.spender.toLowerCase() !== evidence.spender.toLowerCase()
     || execution.attributedApprovalCalldataHash !== evidence.attributedApprovalCalldataHash
@@ -150,8 +152,26 @@ export async function verifyMainnetReceipt(options: MainnetReceiptVerifierOption
   const { invoice, publicClient, repository, txHash } = options;
   const evidence = await repository.getPreparation(options.preparationId);
   if (!evidence) fail('INVALID_PREPARATION', 'Immutable persisted mainnet preparation evidence was not found.');
-  if (invoice.status !== 'pending') fail('DUPLICATE_SETTLEMENT', 'The invoice is already paid or no longer payable.');
-  const { buyer, merchant, asset, stablecoin, router, input: expectedInput, minimumOutput, invoiceOutput } = validatePersistedEvidence(evidence, invoice);
+  const exactPaidRetry = invoice.status === 'paid'
+    && invoice.paymentNetwork === 'x-layer-mainnet'
+    && invoice.paymentTxHash?.toLowerCase() === txHash.toLowerCase();
+  if (invoice.status !== 'pending' && !exactPaidRetry) fail('DUPLICATE_SETTLEMENT', 'The invoice is already paid on another network/by another transaction or no longer payable.');
+  const { buyer, merchant, asset, stablecoin, router, input: expectedInput, minimumOutput, invoiceOutput } = validatePersistedMainnetPreparation(evidence, invoice);
+  const submission = await repository.getSubmission(evidence.id, options.txHash);
+  const handoff = submission ? await repository.getHandoff(submission.handoffId) : null;
+  const preparedAtMs = Date.parse(evidence.preparedAt);
+  const expiresAtMs = Date.parse(evidence.expiresAt);
+  const submittedAtMs = submission ? Date.parse(submission.submittedAt) : Number.NaN;
+  if (!submission || !handoff || submission.handoffId !== handoff.id || handoff.preparationId !== evidence.id
+    || handoff.invoiceId !== invoice.id || handoff.chainId !== 196 || handoff.buyer.toLowerCase() !== evidence.buyer.toLowerCase()
+    || handoff.preparationHash !== evidence.preparationHash || handoff.calldataHash !== evidence.attributedSwapCalldataHash
+    || Date.parse(handoff.handoffStartedAt) < preparedAtMs || Date.parse(handoff.handoffStartedAt) >= expiresAtMs
+    || submission.invoiceId !== invoice.id || submission.chainId !== 196
+    || submission.transactionHash.toLowerCase() !== options.txHash.toLowerCase()
+    || !Number.isFinite(preparedAtMs) || !Number.isFinite(expiresAtMs) || !Number.isFinite(submittedAtMs)
+    || submittedAtMs < Date.parse(handoff.handoffStartedAt)) {
+    fail('INVALID_SUBMISSION', 'A server-recorded exact transaction linked to a valid pre-expiry wallet handoff is required.');
+  }
   const configuredCode = (options.configuredMainnetBuilderCode ?? mainnetAddressConfig.builderCode).trim();
   const expectedPayout = (options.expectedBuilderPayoutAddress ?? mainnetAddressConfig.builderPayoutAddress).trim();
   if (!configuredCode || configuredCode !== evidence.builderCode || configuredCode === VERIFIED_TESTNET_BUILDER_CODE) fail('INVALID_ATTRIBUTION', 'Configured mainnet Builder Code must exactly match the persisted preparation and must not be the testnet code.');
@@ -186,9 +206,8 @@ export async function verifyMainnetReceipt(options: MainnetReceiptVerifierOption
   ]);
   if (beforeBlock.number !== beforeBlockNumber || receiptBlock.number !== receipt.blockNumber || !beforeBlock.hash || !receiptBlock.hash
     || !receiptBlock.parentHash || !preparationBlock.hash || !sameHex(receipt.blockHash, receiptBlock.hash)
-    || !sameHex(receiptBlock.parentHash, beforeBlock.hash)
-    || receiptBlock.timestamp > BigInt(Math.floor(Date.parse(evidence.expiresAt) / 1000))) {
-    fail('NON_CANONICAL_BLOCK', 'Receipt, preparation, or deterministic balance block evidence is inconsistent, expired, or non-canonical.');
+    || !sameHex(receiptBlock.parentHash, beforeBlock.hash)) {
+    fail('NON_CANONICAL_BLOCK', 'Receipt, preparation, or deterministic balance block evidence is inconsistent or non-canonical.');
   }
   if (!/^(0|[1-9][0-9]*)$/.test(evidence.preparationBlockNumber) || !/^0x[0-9a-fA-F]{64}$/.test(evidence.preparationBlockHash)
     || BigInt(evidence.preparationBlockNumber) > beforeBlockNumber || preparationBlock.number !== BigInt(evidence.preparationBlockNumber)
@@ -202,9 +221,20 @@ export async function verifyMainnetReceipt(options: MainnetReceiptVerifierOption
 
   const assetTransfers = rereadReceipt.logs.map((log) => transferFromLog(log, asset)).filter((value): value is NonNullable<typeof value> => Boolean(value));
   const stablecoinTransfers = rereadReceipt.logs.map((log) => transferFromLog(log, stablecoin)).filter((value): value is NonNullable<typeof value> => Boolean(value));
-  const assetDebit = assetTransfers.filter((transfer) => sameAddress(transfer.from, buyer)).reduce((sum, transfer) => sum + transfer.value, 0n);
+  const buyerOutflows = assetTransfers.filter((transfer) => sameAddress(transfer.from, buyer));
+  const buyerRefunds = assetTransfers.filter((transfer) => sameAddress(transfer.to, buyer));
+  if (buyerOutflows.some((transfer) => !sameAddress(transfer.to, router))
+    || buyerRefunds.some((transfer) => !sameAddress(transfer.from, router))) {
+    fail('INVALID_INPUT_AMOUNT', 'Input-token movements include an unexplained or non-router transfer to/from the buyer.');
+  }
+  const grossBuyerOutflow = buyerOutflows.reduce((sum, transfer) => sum + transfer.value, 0n);
+  const routerRefund = buyerRefunds.reduce((sum, transfer) => sum + transfer.value, 0n);
+  if (grossBuyerOutflow <= 0n || grossBuyerOutflow > expectedInput || routerRefund > grossBuyerOutflow) {
+    fail('INVALID_INPUT_AMOUNT', 'Observed buyer input-token outflow/refund exceeds the prepared maximum or is invalid.');
+  }
+  const netBuyerDebit = grossBuyerOutflow - routerRefund;
   const merchantOutput = stablecoinTransfers.filter((transfer) => sameAddress(transfer.to, merchant)).reduce((sum, transfer) => sum + transfer.value, 0n);
-  if (assetDebit !== expectedInput) fail('INVALID_INPUT_AMOUNT', 'The buyer asset debit does not match the exact persisted input amount.');
+  if (netBuyerDebit <= 0n) fail('INVALID_INPUT_AMOUNT', 'The buyer net input-token debit must be positive.');
   if (merchantOutput < minimumOutput || merchantOutput < invoiceOutput) fail('INSUFFICIENT_OUTPUT', 'The merchant output is below the persisted minimum or invoice amount.');
 
   const [buyerBeforeRaw, buyerAfterRaw, merchantBeforeRaw, merchantAfterRaw] = await Promise.all([
@@ -217,7 +247,7 @@ export async function verifyMainnetReceipt(options: MainnetReceiptVerifierOption
   const buyerAfter = exactUint(buyerAfterRaw, 'Buyer input balance after');
   const merchantBefore = exactUint(merchantBeforeRaw, 'Merchant USD₮0 balance before');
   const merchantAfter = exactUint(merchantAfterRaw, 'Merchant USD₮0 balance after');
-  if (buyerBefore - buyerAfter !== expectedInput) fail('INVALID_INPUT_AMOUNT', 'The deterministic buyer balance delta does not equal the exact input amount.');
+  if (buyerBefore < buyerAfter || buyerBefore - buyerAfter !== netBuyerDebit) fail('INVALID_INPUT_AMOUNT', 'The deterministic buyer balance delta does not equal the receipt-derived net debit.');
   if (merchantAfter - merchantBefore !== merchantOutput) fail('INVALID_OUTPUT_BALANCE', 'The deterministic merchant balance delta does not equal the receipt transfer amount.');
 
   const balanceEvidence: MainnetBalanceEvidence = {
@@ -227,25 +257,26 @@ export async function verifyMainnetReceipt(options: MainnetReceiptVerifierOption
     merchantOutputBefore: merchantBefore.toString(), merchantOutputAfter: merchantAfter.toString(),
     buyerInputDelta: (buyerBefore - buyerAfter).toString(), merchantOutputDelta: (merchantAfter - merchantBefore).toString(),
   };
-  const claimed = await repository.claimSettlement({
+  const claimDisposition = await repository.claimSettlement({
     preparationId: evidence.id,
     invoiceId: invoice.id,
     chainId: 196,
     transactionHash: txHash,
     evidence: {
       buyer, merchant, inputToken: asset, outputToken: stablecoin,
-      inputAmount: expectedInput.toString(), outputAmount: merchantOutput.toString(), router,
+      inputAmount: netBuyerDebit.toString(), maxInputAmount: expectedInput.toString(), outputAmount: merchantOutput.toString(), router,
       builderPayout: evidence.builderPayout,
       blockNumber: receipt.blockNumber.toString(), blockHash: receipt.blockHash,
       builderCode: configuredCode, balances: balanceEvidence,
     },
   });
-  if (!claimed) fail('DUPLICATE_SETTLEMENT', 'The atomic database claim rejected a duplicate invoice or transaction.');
+  if (!claimDisposition) fail('DUPLICATE_SETTLEMENT', 'The atomic database claim rejected a duplicate invoice or transaction.');
 
   return {
     status: 'paid', invoiceId: invoice.id, paymentTxHash: txHash, buyer, merchant,
-    spentAsset: asset, spentAmount: expectedInput.toString(), stablecoin, stablecoinReceived: merchantOutput.toString(),
+    spentAsset: asset, spentAmount: netBuyerDebit.toString(), stablecoin, stablecoinReceived: merchantOutput.toString(),
     router, blockNumber: receipt.blockNumber.toString(), blockHash: receipt.blockHash,
     confirmationDepth: Number(confirmations), builderCode: configuredCode, builderCodeCheck, canonical: true, balanceEvidence,
+    claimDisposition,
   };
 }

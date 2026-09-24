@@ -1,8 +1,8 @@
 import { Attribution } from 'ox/erc8021';
 import { createPublicClient, http, stringToHex, type Address, type Hex } from 'viem';
-import { portPayNetworkConfig, xLayerTestnet } from './network';
+import { internalTestnetNetworkConfig, xLayerTestnet } from './network';
 
-export const portPayBuilderCode = portPayNetworkConfig.builderCode.trim();
+export const portPayBuilderCode = internalTestnetNetworkConfig.builderCode.trim();
 export const VERIFIED_TESTNET_BUILDER_CODE = 'kob1lkgsg6infkg3' as const;
 export const BUILDER_CODE_REGISTRY_ADDRESS = '0x33907e98d7392d95212b05ab03f091e02d7815bf' as const;
 export const EXPECTED_BUILDER_PAYOUT_ADDRESS = '0xbabdfef588cf57efcc7c8857960e3ccdd9167589' as const;
@@ -16,7 +16,7 @@ export const builderCodeRegistryAbi = [{
 
 const builderCodePublicClient = createPublicClient({
   chain: xLayerTestnet,
-  transport: http(portPayNetworkConfig.rpcUrl),
+  transport: http(internalTestnetNetworkConfig.rpcUrl),
 });
 
 export type BuilderCodeVerificationDiagnostics = {
@@ -59,7 +59,7 @@ export async function readBuilderCodePayoutAddress(code: string): Promise<Addres
   const tokenId = builderCodeRegistryTokenId(code);
   const diagnostics: BuilderCodeVerificationDiagnostics = {
     code,
-    rpcUrl: portPayNetworkConfig.rpcUrl,
+    rpcUrl: internalTestnetNetworkConfig.rpcUrl,
     registryAddress: BUILDER_CODE_REGISTRY_ADDRESS,
     getter: 'payoutAddress(uint256)',
     tokenIdHex,
@@ -109,7 +109,7 @@ export async function assertRegisteredBuilderCode(
       `PortPay could not verify Builder Code ${code} on X Layer Testnet. Check registration and RPC access.`,
       {
         code,
-        rpcUrl: portPayNetworkConfig.rpcUrl,
+        rpcUrl: internalTestnetNetworkConfig.rpcUrl,
         registryAddress: BUILDER_CODE_REGISTRY_ADDRESS,
         getter: 'payoutAddress(uint256)',
         tokenIdHex: stringToHex(code),
@@ -124,7 +124,7 @@ export async function assertRegisteredBuilderCode(
   if (payoutAddress.toLowerCase() !== EXPECTED_BUILDER_PAYOUT_ADDRESS.toLowerCase()) {
     const diagnostics: BuilderCodeVerificationDiagnostics = {
       code,
-      rpcUrl: portPayNetworkConfig.rpcUrl,
+      rpcUrl: internalTestnetNetworkConfig.rpcUrl,
       registryAddress: BUILDER_CODE_REGISTRY_ADDRESS,
       getter: 'payoutAddress(uint256)',
       tokenIdHex: stringToHex(code),

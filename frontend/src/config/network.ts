@@ -7,6 +7,7 @@ const DEFAULT_MAINNET_EXPLORER_URL = 'https://www.okx.com/web3/explorer/xlayer';
 export const VERIFIED_TESTNET_USDT0_ADDRESS =
   '0x9e29b3aada05bf2d2c827af80bd28dc0b9b4fb0c' as const;
 export const VERIFIED_MAINNET_WNVDA_ADDRESS = '0xa8ddb5cd96b5222afe198316e9a57caa642850d5' as const;
+export const VERIFIED_MAINNET_WAAPL_ADDRESS = '0x943bf64d566c32a2bcd41ac92fb63c111cc9de8f' as const;
 export const VERIFIED_MAINNET_USDT0_ADDRESS = '0x779ded0c9e1022225f8e0630b35a9b54be713736' as const;
 
 export const xLayerTestnet = defineChain({
@@ -30,7 +31,7 @@ export const xLayerTestnet = defineChain({
   },
 });
 
-export const portPayNetworkConfig = {
+export const internalTestnetNetworkConfig = {
   chainId: xLayerTestnet.id,
   rpcUrl: xLayerTestnet.rpcUrls.default.http[0],
   explorerUrl: xLayerTestnet.blockExplorers.default.url,
@@ -61,5 +62,10 @@ export const mainnetNetworkConfig = {
   rpcUrl: xLayerMainnet.rpcUrls.default.http[0],
   explorerUrl: xLayerMainnet.blockExplorers.default.url,
   wNvdaAddress: import.meta.env.VITE_MAINNET_WNVDA_ADDRESS || VERIFIED_MAINNET_WNVDA_ADDRESS,
+  wAaplAddress: import.meta.env.VITE_MAINNET_WAAPL_ADDRESS || VERIFIED_MAINNET_WAAPL_ADDRESS,
   usdt0Address: import.meta.env.VITE_MAINNET_USDT0_ADDRESS || VERIFIED_MAINNET_USDT0_ADDRESS,
 } as const;
+
+/** The unqualified PortPay network is the user-facing product network. */
+export const portPayNetworkConfig = mainnetNetworkConfig;
+export const portPayProductNetworkConfig = mainnetNetworkConfig;

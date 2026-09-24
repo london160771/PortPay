@@ -37,10 +37,13 @@ export type ReconcilePaymentInput = {
   smartSpendReason?: string;
 };
 
+/** Adapters return verified facts; the invoice reconciliation boundary assigns network identity. */
+export type SettlementPaymentEvidence = Omit<PaymentEvidence, 'paymentNetwork'>;
+
 export type SettlementAdapter = {
   readonly name: 'TestnetSettlementAdapter' | 'OKXDEXMainnetAdapter';
   createQuote(invoice: Invoice, buyerAddress: string, assetKey?: string): Promise<SettlementQuoteResponse>;
-  reconcilePayment(invoice: Invoice, input: ReconcilePaymentInput): Promise<PaymentEvidence>;
+  reconcilePayment(invoice: Invoice, input: ReconcilePaymentInput): Promise<SettlementPaymentEvidence>;
 };
 
 export type SettlementAdapterDependencies = {

@@ -83,12 +83,13 @@ export async function runLocalMainnetPreflight(): Promise<number> {
     return 1;
   }
 
-  const [{ mainnetAddressConfig, mainnetSupportedAssets, xLayerMainnet, xLayerMainnetChain }, { OKXDEXMainnetAdapter }, { OkxDexApiClient }, { runMainnetPreflight }, { InMemoryMainnetReconciliationRepository }] = await Promise.all([
+  const [{ mainnetAddressConfig, mainnetSupportedAssets, xLayerMainnet, xLayerMainnetChain }, { OKXDEXMainnetAdapter }, { OkxDexApiClient }, { runMainnetPreflight }, { InMemoryMainnetReconciliationRepository }, { MAINNET_APPROVAL_PROOF_SLIPPAGE_PERCENT }] = await Promise.all([
     import('../config/xlayerMainnet.js'),
     import('../settlement/mainnet.js'),
     import('../settlement/okxDexApi.js'),
     import('../settlement/mainnetPreflight.js'),
     import('../settlement/mainnetReconciliationRepository.js'),
+    import('../settlement/mainnetApprovalPreparation.js'),
   ]);
 
   const apiObservations: ApiObservation[] = [];
@@ -183,7 +184,7 @@ export async function runLocalMainnetPreflight(): Promise<number> {
 
   try {
     // Fixed literal by design: do not size this input from the synthetic invoice.
-    const quote = await adapter.getQuote({ assetKey: 'wNvda', assetAmount: LOCAL_MAINNET_PREFLIGHT_INPUT_BASE_UNITS, buyerAddress: buyer, invoice });
+    const quote = await adapter.getQuote({ assetKey: 'wNvda', assetAmount: LOCAL_MAINNET_PREFLIGHT_INPUT_BASE_UNITS, buyerAddress: buyer, invoice, slippagePercent: MAINNET_APPROVAL_PROOF_SLIPPAGE_PERCENT });
     const approval = await adapter.prepareApprovalTransaction(quote);
     const decodedApproval = decodeFunctionData({ abi: approvalAbi, data: approval.data });
     const spender = decodedApproval.args[0];
@@ -215,7 +216,7 @@ export async function runLocalMainnetPreflight(): Promise<number> {
     const assetBalance = balances?.assetBalance;
     const balanceSufficient = assetBalance !== undefined && BigInt(assetBalance) >= BigInt(LOCAL_MAINNET_PREFLIGHT_INPUT_BASE_UNITS);
 
-    print('Fresh OKX quote', `input ${quote.assetAmount} base units; expires ${quote.expiresAt}`);
+    print('Fresh OKX quote', `input ${quote.assetAmount} base units; slippage ${quote.slippagePercent}%; expires ${quote.expiresAt}`);
     print('Buyer wNVDAx balance', balances ? `${formatted(assetBalance, 18)} (${assetBalance} base units) — ${balanceSufficient ? 'sufficient' : 'insufficient'}` : 'not verified');
     print('Expected USD₮0 output', expectedOutput ? `${formatted(expectedOutput, 6)} (${expectedOutput} base units)` : 'not available — fresh swap response was not accepted');
     print('Minimum receive', minimumReceive ? `${formatted(minimumReceive, 6)} (${minimumReceive} base units); >= 1.00: ${minimumCoversInvoice ? 'yes' : 'no'}` : 'not available');

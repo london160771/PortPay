@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import type { Invoice, InvoiceRepository } from './types.js';
+import type { Invoice, InvoiceRepository, PaymentNetwork } from './types.js';
 import { validateCreateInvoiceInput } from './validation.js';
 
 export function buildPaymentUrl(publicAppUrl: string, invoiceId: string): string {
@@ -10,6 +10,7 @@ export async function createInvoice(
   repository: InvoiceRepository,
   publicAppUrl: string,
   input: unknown,
+  paymentNetwork: PaymentNetwork = 'x-layer-mainnet',
 ): Promise<Invoice> {
   const validated = validateCreateInvoiceInput(input);
   const now = new Date().toISOString();
@@ -23,6 +24,7 @@ export async function createInvoice(
     ...(validated.externalOrderReference ? { externalOrderReference: validated.externalOrderReference } : {}),
     paymentUrl: buildPaymentUrl(publicAppUrl, id),
     status: 'pending',
+    paymentNetwork,
     createdAt: now,
     updatedAt: now,
   });

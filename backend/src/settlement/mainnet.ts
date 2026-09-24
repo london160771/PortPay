@@ -54,6 +54,8 @@ type BaseRequest = {
 };
 
 const DEFAULT_QUOTE_TTL_SECONDS = 60;
+export const MAINNET_MAX_SLIPPAGE_PERCENT = '1.5';
+const MAINNET_MAX_SLIPPAGE_BASIS_POINTS = 15_000n;
 const ZERO_ADDRESS = '0x0000000000000000000000000000000000000000';
 const KNOWN_TESTNET_ADDRESSES = new Set([
   '0x9e29b3aada05bf2d2c827af80bd28dc0b9b4fb0c',
@@ -141,6 +143,7 @@ export type MainnetSwapExecutionEvidence = {
   inputToken: Address;
   outputToken: Address;
   exactInputAmount: string;
+  inputConsumptionMode: 'exact-in-max-debit-net-observed';
   expectedOutputAmount: string;
   minimumReceiveAmount: string;
   router: Address;
@@ -355,7 +358,8 @@ export function validateMainnetSwapExecutionEvidence(quote: MainnetQuote, prepar
     || evidence.invoiceId !== quote.invoiceId || evidence.chainId !== 196
     || !sameAddress(evidence.buyer, quote.buyer) || !sameAddress(evidence.merchant, quote.merchant)
     || !sameAddress(evidence.inputToken, quote.asset) || !sameAddress(evidence.outputToken, quote.stablecoin)
-    || evidence.exactInputAmount !== quote.assetAmount || evidence.slippagePercent !== quote.slippagePercent
+    || evidence.exactInputAmount !== quote.assetAmount || evidence.inputConsumptionMode !== 'exact-in-max-debit-net-observed'
+    || evidence.slippagePercent !== quote.slippagePercent
     || evidence.builderCode !== prepared.builderCode
     || !sameAddress(evidence.router, prepared.to) || evidence.minimumReceiveAmount !== prepared.minReceiveAmount
     || !isAddress(evidence.spender) || !/^0x[0-9a-fA-F]{64}$/.test(evidence.attributedApprovalCalldataHash)
@@ -401,10 +405,10 @@ function parseGas(value: string, label: string): bigint {
 }
 
 function parseSlippageBasisPoints(value: string): bigint {
-  if (!/^\d+(?:\.\d{1,4})?$/.test(value)) throw new MainnetPreparationError('Slippage must be between 0 and 1 percent.');
+  if (!/^\d+(?:\.\d{1,4})?$/.test(value)) throw new MainnetPreparationError(`Slippage must be between 0 and ${MAINNET_MAX_SLIPPAGE_PERCENT} percent.`);
   const [whole, fraction = ''] = value.split('.');
   const tenThousandthsPercent = BigInt(whole) * 10_000n + BigInt(fraction.padEnd(4, '0'));
-  if (tenThousandthsPercent > 10_000n) throw new MainnetPreparationError('Slippage must be between 0 and 1 percent.');
+  if (tenThousandthsPercent > MAINNET_MAX_SLIPPAGE_BASIS_POINTS) throw new MainnetPreparationError(`Slippage must be between 0 and ${MAINNET_MAX_SLIPPAGE_PERCENT} percent.`);
   return tenThousandthsPercent;
 }
 
@@ -588,6 +592,7 @@ export class OKXDEXMainnetAdapter {
       inputToken: quote.asset,
       outputToken: quote.stablecoin,
       exactInputAmount: quote.assetAmount,
+      inputConsumptionMode: 'exact-in-max-debit-net-observed',
       expectedOutputAmount: raw.routerResult.toTokenAmount,
       minimumReceiveAmount: transaction.minReceiveAmount,
       router: prepared.to,

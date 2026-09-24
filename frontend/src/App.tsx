@@ -25,16 +25,18 @@ import {
   type MainnetApprovalPreparation,
   type SettlementQuote,
 } from './config/api';
-import { erc20BalanceAbi, formatTokenBalance, parseConfiguredAddress, portfolioAssets, testnetAssets } from './config/assets';
-import { mainnetNetworkConfig, portPayNetworkConfig, xLayerMainnet, xLayerTestnet } from './config/network';
+import { erc20BalanceAbi, formatTokenBalance, mainnetAssets, parseConfiguredAddress, portfolioAssets, testnetAssets } from './config/assets';
+import { internalTestnetNetworkConfig, mainnetNetworkConfig, xLayerMainnet, xLayerTestnet } from './config/network';
 import { invoiceStatusLabel, paymentStatusLabel, paymentSuccessLabel, readInvoiceRoute, showBuyerSelectionDetails, type InvoiceRoute } from './config/invoice';
 import {
   formatPaymentTimestamp,
   formatReceivedAmount,
   formatSpentAmount,
+  getInvoicePaymentNetwork,
   getExplorerTransactionUrl,
   hasVerifiedPaymentEvidence,
   isOfficialSettlementAsset,
+  paymentNetworkLabel,
 } from './config/history';
 import { needsApproval, validatePaymentQuote } from './config/payment';
 import {
@@ -46,7 +48,7 @@ import {
   type TargetAllocationBps,
 } from './config/smartSpend';
 import { portPaySettlementAbi, type SettlementWriteQuote } from './config/settlement';
-import { getWalletNetworkState, shortenAddress } from './config/wallet';
+import { getInternalTestnetWalletNetworkState, getWalletNetworkState, shortenAddress } from './config/wallet';
 import { okxWalletConnector } from './config/wagmi';
 import {
   assertRegisteredBuilderCode,
@@ -59,7 +61,7 @@ import { validatePreparedMainnetApproval } from './config/mainnetApproval';
 
 
 type TokenBalanceCardProps = {
-  asset: (typeof testnetAssets)[keyof typeof testnetAssets];
+  asset: (typeof mainnetAssets)[keyof typeof mainnetAssets];
   account: Address | undefined;
   canRead: boolean;
 };
@@ -72,14 +74,14 @@ function TokenBalanceCard({ asset, account, canRead }: TokenBalanceCardProps) {
     abi: erc20BalanceAbi,
     functionName: 'balanceOf',
     args: account ? [account] : undefined,
-    chainId: xLayerTestnet.id,
+    chainId: xLayerMainnet.id,
     query: { enabled: queryEnabled },
   });
   const { data: decimals, isError: decimalsError, isLoading: decimalsLoading } = useReadContract({
     address,
     abi: erc20BalanceAbi,
     functionName: 'decimals',
-    chainId: xLayerTestnet.id,
+    chainId: xLayerMainnet.id,
     query: { enabled: queryEnabled },
   });
 
@@ -87,7 +89,7 @@ function TokenBalanceCard({ asset, account, canRead }: TokenBalanceCardProps) {
   const isLoading = balanceLoading || decimalsLoading;
   const readFailed = balanceError || decimalsError;
 
-  let detail = 'Connect OKX Wallet on X Layer Testnet to read this balance.';
+  let detail = 'Connect OKX Wallet on X Layer Mainnet to read this balance.';
   if (!address) {
     detail = `Address not configured yet. Deploy ${asset.label}, then set its VITE_* address variable.`;
   } else if (canRead && isLoading) {
@@ -95,7 +97,7 @@ function TokenBalanceCard({ asset, account, canRead }: TokenBalanceCardProps) {
   } else if (canRead && readFailed) {
     detail = 'Unable to read this token at the configured address.';
   } else if (canRead && formattedBalance !== undefined) {
-    detail = 'Read from the token contract on X Layer Testnet.';
+    detail = 'Read from the token contract on X Layer Mainnet.';
   }
 
   return (
@@ -105,7 +107,7 @@ function TokenBalanceCard({ asset, account, canRead }: TokenBalanceCardProps) {
           <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-ink/45">Wallet balance</p>
           <h3 className="mt-2 text-xl font-semibold tracking-tight">{asset.label}</h3>
         </div>
-        <span className="rounded-full bg-mint/75 px-3 py-1 text-[10px] font-bold uppercase tracking-[0.12em] text-ink">Testnet</span>
+        <span className="rounded-full bg-mint/75 px-3 py-1 text-[10px] font-bold uppercase tracking-[0.12em] text-ink">Mainnet</span>
       </div>
       <p className="mt-3 min-h-12 text-sm leading-6 text-ink/55">{asset.description}</p>
       <p className="mt-6 text-3xl font-semibold tracking-tight">
@@ -133,7 +135,7 @@ function WalletPanel() {
           <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-mint/75">Merchant wallet</p>
           <h2 className="mt-2 text-2xl font-semibold tracking-tight">Ready to collect</h2>
           <p className="mt-2 max-w-xl text-sm leading-6 text-white/60">
-            Connect OKX Wallet to create invoices, share payment links, and watch confirmed receipts arrive on X Layer Testnet.
+            Connect OKX Wallet to create invoices and payment links for X Layer Mainnet.
           </p>
         </div>
         <span
@@ -146,7 +148,7 @@ function WalletPanel() {
           }`}
         >
           {networkState === 'ready'
-            ? 'X LAYER TESTNET'
+            ? 'X LAYER MAINNET'
             : networkState === 'wrong-network'
               ? 'WRONG NETWORK'
               : 'NOT CONNECTED'}
@@ -168,24 +170,24 @@ function WalletPanel() {
         </div>
       ) : networkState === 'wrong-network' ? (
         <div className="mt-7 rounded-2xl border border-amber-200/20 bg-amber-200/10 p-4">
-          <p className="text-sm font-semibold text-amber-100">Switch to X Layer Testnet to create invoices.</p>
+          <p className="text-sm font-semibold text-amber-100">Switch to X Layer Mainnet to create invoices.</p>
           <p className="mt-1 text-xs text-amber-100/70">
-            This wallet is connected on chain {chainId ?? 'unknown'}; PortPay merchant actions are enabled only on chain 1952.
+            This wallet is connected on chain {chainId ?? 'unknown'}; PortPay merchant actions require chain 196.
           </p>
           <button
             type="button"
             className="mt-4 rounded-xl bg-amber-200 px-4 py-2.5 text-sm font-bold text-amber-950 transition hover:bg-white disabled:cursor-wait disabled:opacity-60"
-            onClick={() => switchChain({ chainId: xLayerTestnet.id })}
+            onClick={() => switchChain({ chainId: xLayerMainnet.id })}
             disabled={isSwitching}
           >
-            {isSwitching ? 'Switching network…' : 'Switch to X Layer Testnet'}
+            {isSwitching ? 'Switching network…' : 'Switch to X Layer Mainnet'}
           </button>
           {switchError ? <p className="mt-3 text-sm text-rose-200">{switchError.message}</p> : null}
         </div>
       ) : (
         <div className="mt-7 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
           <div>
-            <p className="text-sm font-semibold text-mint">Wallet connected to X Layer Testnet</p>
+            <p className="text-sm font-semibold text-mint">Wallet connected to X Layer Mainnet</p>
             <p className="mt-1 font-mono text-sm text-white/60">{shortenAddress(address!)}</p>
           </div>
           <button
@@ -199,16 +201,16 @@ function WalletPanel() {
       )}
 
       <div className="mt-7 grid gap-3 border-t border-white/10 pt-5 text-xs text-white/45 sm:grid-cols-2">
-        <span>Network: {xLayerTestnet.name}</span>
-        <span>Chain ID: {portPayNetworkConfig.chainId}</span>
-        <span>Gas: {xLayerTestnet.nativeCurrency.symbol}</span>
+        <span>Network: {xLayerMainnet.name}</span>
+        <span>Chain ID: {mainnetNetworkConfig.chainId}</span>
+        <span>Gas: {xLayerMainnet.nativeCurrency.symbol}</span>
         <span>Invoices: Supabase/Postgres</span>
       </div>
 
       <div className="mt-6 grid gap-4 lg:grid-cols-2">
-        <TokenBalanceCard asset={testnetAssets.demoAapl} account={address} canRead={canReadBalances} />
-        <TokenBalanceCard asset={testnetAssets.demoNvda} account={address} canRead={canReadBalances} />
-        <TokenBalanceCard asset={testnetAssets.usdt0} account={address} canRead={canReadBalances} />
+        <TokenBalanceCard asset={mainnetAssets.wNvda} account={address} canRead={canReadBalances} />
+        <TokenBalanceCard asset={mainnetAssets.wAapl} account={address} canRead={canReadBalances} />
+        <TokenBalanceCard asset={mainnetAssets.usdt0} account={address} canRead={canReadBalances} />
       </div>
       </div>
     </section>
@@ -258,7 +260,7 @@ function InvoiceForm({
     event.preventDefault();
     setError('');
     if (!canCreate || !merchantAddress) {
-      setError('Connect the merchant wallet on X Layer Testnet first.');
+      setError('Connect the merchant wallet on X Layer Mainnet first.');
       return;
     }
 
@@ -281,7 +283,7 @@ function InvoiceForm({
         <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-ink/45">Step 1 · Create</p>
         <h2 className="mt-2 text-2xl font-semibold tracking-tight">Create a payment request</h2>
         <p className="mt-2 text-sm leading-6 text-ink/55">
-          Name the thing you are charging for and set the exact amount in official testnet USD₮0. PortPay creates a unique link you can send to the buyer.
+          Set the amount your business receives in real USD₮0. PortPay creates a hosted payment link for your customer.
         </p>
       </div>
 
@@ -324,7 +326,7 @@ function InvoiceForm({
           {isSubmitting ? 'Saving invoice…' : 'Create invoice and payment link'}
         </button>
         {!canCreate ? (
-          <p className="text-center text-xs text-ink/45">Connect and switch to X Layer Testnet to enable invoice creation.</p>
+          <p className="text-center text-xs text-ink/45">Connect and switch to X Layer Mainnet to enable invoice creation.</p>
         ) : null}
       </form>
     </section>
@@ -397,7 +399,7 @@ function PaymentHistoryPanel({
             {view === 'merchant' ? 'What this wallet received' : 'What this wallet spent'}
           </h2>
           <p className="mt-2 max-w-2xl text-sm leading-6 text-ink/55">
-            Confirmed payments only. Every row is backed by persisted settlement evidence and links to the X Layer receipt.
+          Confirmed payments only. Each row is backed by persisted evidence and links to its transaction on the correct X Layer explorer.
           </p>
         </div>
         <span className="rounded-full bg-cloud px-3 py-2 text-xs font-semibold text-ink/55">
@@ -409,7 +411,7 @@ function PaymentHistoryPanel({
       {loadError ? <p className="mt-7 rounded-xl bg-rose-50 px-4 py-3 text-sm text-rose-700">{loadError}</p> : null}
       {!canRead || !address ? (
         <p className="mt-7 rounded-2xl bg-cloud p-5 text-sm leading-6 text-ink/55">
-          Connect a wallet on X Layer Testnet to load its payment history.
+          Connect a wallet on X Layer Mainnet to load its payment history.
         </p>
       ) : null}
       {canRead && address && !isLoading && !loadError && payments.length === 0 ? (
@@ -421,7 +423,8 @@ function PaymentHistoryPanel({
       {payments.length > 0 ? (
         <div className="mt-7 space-y-3">
           {payments.map((payment) => {
-            const explorerUrl = getExplorerTransactionUrl(payment.paymentTxHash);
+            const paymentNetwork = getInvoicePaymentNetwork(payment);
+            const explorerUrl = getExplorerTransactionUrl(payment.paymentTxHash, paymentNetwork);
             const evidenceComplete = hasVerifiedPaymentEvidence(payment);
             return (
               <article key={payment.id} className="group rounded-2xl border border-ink/10 bg-cloud/60 p-4 transition hover:border-ink/20 hover:bg-white sm:p-5">
@@ -429,7 +432,7 @@ function PaymentHistoryPanel({
                   <button type="button" className="text-left" onClick={() => onOpenInvoice(payment.id)}>
                     <p className="font-semibold group-hover:underline group-hover:underline-offset-4">{payment.title}</p>
                     <p className="mt-1 text-xs text-ink/45">
-                      Paid {formatPaymentTimestamp(payment.paidAt)} · Invoice {payment.id.slice(0, 8)}…
+                      Paid {formatPaymentTimestamp(payment.paidAt)} · {paymentNetworkLabel(paymentNetwork)} · Invoice {payment.id.slice(0, 8)}…
                     </p>
                   </button>
                   <InvoiceStatusPill status={payment.status} label={view === 'buyer' ? 'Payment confirmed' : undefined} />
@@ -479,17 +482,17 @@ function PaymentHistoryPanel({
 
 function DemoJourney() {
   const steps = [
-    { number: '01', title: 'Create', detail: 'Merchant sets a USD₮0 amount and shares one link.' },
-    { number: '02', title: 'Pay', detail: 'Buyer reviews a precise quote and confirms in OKX Wallet.' },
-    { number: '03', title: 'Confirm', detail: 'Both sides see the same verified X Layer receipt.' },
+    { number: '01', title: 'Request', detail: 'Merchant sets a real USD₮0 amount and shares one hosted link.' },
+    { number: '02', title: 'Prepare', detail: 'Buyer reviews a supported tokenized asset and exact approval details.' },
+    { number: '03', title: 'Complete later', detail: 'Final swap execution remains disabled pending final security review and authorization.' },
   ];
 
   return (
     <aside id="two-tab-demo" className="portpay-appear rounded-[1.75rem] border border-white/10 bg-ink p-5 text-white shadow-soft sm:p-6">
       <div className="flex items-center justify-between gap-4">
         <div>
-          <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-mint/75">Two-tab demo</p>
-          <h2 className="mt-2 text-xl font-semibold tracking-tight">A clean handoff, end to end.</h2>
+          <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-mint/75">Merchant + buyer flow</p>
+          <h2 className="mt-2 text-xl font-semibold tracking-tight">One invoice link. A clear payment path.</h2>
         </div>
         <span className="grid h-10 w-10 place-items-center rounded-2xl bg-mint text-lg font-bold text-ink">↗</span>
       </div>
@@ -508,7 +511,7 @@ function DemoJourney() {
         ))}
       </div>
       <div className="mt-7 rounded-2xl border border-mint/20 bg-mint/10 p-4 text-xs leading-5 text-white/65">
-        <span className="font-semibold text-mint">Testnet only.</span> DemoAAPL and DemoNVDA are ordinary demo assets, not real shares. Merchant settlement uses official X Layer Testnet USD₮0.
+        <span className="font-semibold text-mint">Execution status.</span> Mainnet invoice and exact approval preparation are available; buyer-signed swaps remain disabled pending final security review and authorization.
       </div>
     </aside>
   );
@@ -566,13 +569,13 @@ function MerchantDashboard({ onOpenMerchantInvoice }: { onOpenMerchantInvoice: (
         <div className="relative">
           <div className="mb-6 inline-flex items-center gap-2 rounded-full border border-ink/10 bg-white/75 px-3 py-1.5 text-[11px] font-bold uppercase tracking-[0.16em] text-ink/60 shadow-sm">
             <span className="h-2 w-2 rounded-full bg-emerald-600" />
-            Merchant workspace · X Layer Testnet
+            Merchant workspace · X Layer Mainnet
           </div>
           <h1 className="max-w-3xl text-4xl font-semibold leading-[1] tracking-[-0.055em] sm:text-6xl">
             Spend portfolios.<br /><span className="text-ink/45">Receive stablecoins.</span>
           </h1>
           <p className="mt-5 max-w-2xl text-base leading-7 text-ink/65">
-            PortPay lets customers spend their tokenized stock portfolio while merchants receive stablecoins. Request payment in USD₮0, share one link, and receive a verified receipt.
+            PortPay lets customers spend their tokenized stock portfolio while merchants receive stablecoins. Request payment in real USD₮0 and share one hosted link.
           </p>
           <div className="mt-8 flex flex-col gap-3 sm:flex-row sm:items-center">
             <a href="#create-invoice" className="inline-flex items-center justify-center rounded-xl bg-ink px-5 py-3.5 text-sm font-bold text-white shadow-sm transition hover:-translate-y-0.5 hover:bg-ink/85 hover:shadow-panel">
@@ -646,7 +649,7 @@ function MerchantDashboard({ onOpenMerchantInvoice }: { onOpenMerchantInvoice: (
             </p>
           ) : invoices.length === 0 && !isLoading ? (
             <p className="mt-8 rounded-2xl bg-cloud p-5 text-sm leading-6 text-ink/55">
-              No invoices yet. Once the wallet is connected to X Layer Testnet, create the first payment request.
+              No invoices yet. Once the wallet is connected to X Layer Mainnet, create the first payment request.
             </p>
           ) : (
             <div className="mt-6 divide-y divide-ink/10">
@@ -715,7 +718,7 @@ function BuyerWalletPanel({
   const { switchChain, error: switchError, isPending: isSwitching } = useSwitchChain();
   const { writeContractAsync } = useWriteContract();
   const publicClient = usePublicClient({ chainId: xLayerTestnet.id });
-  const networkState = getWalletNetworkState(isConnected, chainId);
+  const networkState = getInternalTestnetWalletNetworkState(isConnected, chainId);
   const [selectedAssetKey, setSelectedAssetKey] = useState<SmartSpendAssetKey>('demoAapl');
   const [appliedSmartSpend, setAppliedSmartSpend] = useState<ReturnType<typeof snapshotSmartSpendChoice>>(undefined);
   const smartSpendApplied = Boolean(appliedSmartSpend);
@@ -724,7 +727,7 @@ function BuyerWalletPanel({
   const demoAaplAddress = parseConfiguredAddress(portfolioAssets.demoAapl.address);
   const demoNvdaAddress = parseConfiguredAddress(portfolioAssets.demoNvda.address);
   const stablecoinAddress = parseConfiguredAddress(testnetAssets.usdt0.address);
-  const settlementAddress = parseConfiguredAddress(portPayNetworkConfig.settlementAddress);
+  const settlementAddress = parseConfiguredAddress(internalTestnetNetworkConfig.settlementAddress);
   const balancesEnabled = networkState === 'ready' && Boolean(address);
   const { data: demoAaplBalance, isLoading: isAaplBalanceLoading, isError: isAaplBalanceError } = useReadContract({
     address: demoAaplAddress,
@@ -1378,7 +1381,7 @@ function MainnetApprovalPanel({ invoice }: { invoice: Invoice }) {
         </div>
       )}
       {connectError ? <p className="mt-3 text-sm text-rose-700">{connectError.message}</p> : null}
-      <p className="mt-4 text-xs leading-5 text-ink/45">Mainnet token: {mainnetNetworkConfig.wNvdaAddress} · Chain 1952 testnet checkout remains separate and unchanged.</p>
+      <p className="mt-4 text-xs leading-5 text-ink/45">X Layer Mainnet · wNVDAx · chain 196. Final swap execution is disabled.</p>
     </section>
   );
 }
@@ -1445,11 +1448,17 @@ function BuyerCheckoutPage({ invoiceId, paymentNetwork, onBack, onOpenBuyerInvoi
           </div>
         ) : invoice ? (
           <div className="pt-8">
+            {(() => {
+              const persistedNetwork = getInvoicePaymentNetwork(invoice);
+              const effectiveNetwork = invoice.paymentNetwork ? persistedNetwork : paymentNetwork === 'testnet' ? 'x-layer-testnet' : persistedNetwork;
+              const isMainnet = effectiveNetwork === 'x-layer-mainnet';
+              return (
+                <>
             <div className="flex flex-wrap items-center justify-between gap-3">
-              <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-ink/45">{paymentNetwork === 'mainnet' ? 'PortPay checkout · Mainnet approval-only' : 'PortPay checkout · Step 2 of 3'}</p>
-              {paymentNetwork === 'mainnet'
+              <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-ink/45">{isMainnet ? 'PortPay checkout · Mainnet preparation' : 'Historical internal receipt'}</p>
+              {isMainnet
                 ? <span className="rounded-full bg-amber-100 px-3 py-1 text-[10px] font-bold uppercase tracking-[0.12em] text-amber-950">X Layer Mainnet · 196</span>
-                : <InvoiceStatusPill status={invoice.status} label={invoice.status === 'paid' ? 'Payment confirmed' : undefined} />}
+                : <span className="rounded-full bg-cloud px-3 py-1 text-[10px] font-bold uppercase tracking-[0.12em] text-ink/60">Legacy X Layer Testnet · 1952</span>}
             </div>
             <div className="mt-6 grid gap-5 lg:grid-cols-[1fr_auto] lg:items-end">
               <div>
@@ -1462,35 +1471,34 @@ function BuyerCheckoutPage({ invoiceId, paymentNetwork, onBack, onOpenBuyerInvoi
               </div>
             </div>
 
-            <div className={`mt-8 rounded-2xl p-5 ${paymentNetwork === 'testnet' && invoice.status === 'paid' ? 'border border-emerald-200 bg-emerald-50' : 'border border-ink/10 bg-cloud'}`}>
+            <div className={`mt-8 rounded-2xl p-5 ${invoice.status === 'paid' ? 'border border-emerald-200 bg-emerald-50' : 'border border-ink/10 bg-cloud'}`}>
               <div className="flex items-center gap-3">
-                <span className={`grid h-8 w-8 place-items-center rounded-full text-sm font-bold ${paymentNetwork === 'testnet' && invoice.status === 'paid' ? 'bg-emerald-600 text-white' : 'bg-amber-200 text-amber-950'}`}>
-                  {paymentNetwork === 'testnet' && invoice.status === 'paid' ? '✓' : '…'}
+                <span className={`grid h-8 w-8 place-items-center rounded-full text-sm font-bold ${invoice.status === 'paid' ? 'bg-emerald-600 text-white' : 'bg-amber-200 text-amber-950'}`}>
+                  {invoice.status === 'paid' ? '✓' : '…'}
                 </span>
-                <p className="text-sm font-semibold">{paymentNetwork === 'mainnet' ? invoice.status === 'pending' ? 'Mainnet approval preparation' : 'Mainnet checkout unavailable' : paymentStatusLabel('buyer', invoice.status)}</p>
+                <p className="text-sm font-semibold">{invoice.status === 'paid' ? paymentSuccessLabel('buyer') : isMainnet ? 'Mainnet payment preparation' : 'Legacy testnet invoice'}</p>
               </div>
               <p className="mt-2 text-sm leading-6 text-ink/55">
-                {paymentNetwork === 'mainnet'
-                  ? invoice.status === 'pending'
-                    ? 'This opt-in path prepares one exact wNVDAx approval on X Layer Mainnet. It does not execute a swap or mark the invoice paid.'
-                    : 'The stored paid status belongs to the existing testnet invoice flow. Mainnet approval is unavailable and no mainnet payment is inferred.'
-                  : invoice.status === 'paid'
-                    ? 'This status is read from a confirmed PortPay settlement event on X Layer Testnet.'
-                    : 'Review the exact quote below, then approve the selected demo asset and confirm payment in OKX Wallet.'}
+                {invoice.status === 'paid'
+                  ? 'This receipt is rendered from the persisted payment evidence for the network shown below.'
+                  : isMainnet
+                    ? 'The exact wNVDAx approval can be prepared and, where authorized, manually confirmed. Buyer-signed swap execution is disabled; this invoice cannot be completed from checkout yet.'
+                    : 'This historical testnet invoice is available only through internal development tooling.'}
               </p>
             </div>
 
-            {invoice.status === 'pending' && paymentNetwork === 'mainnet' ? <MainnetApprovalPanel invoice={invoice} /> : null}
-            {invoice.status === 'pending' && paymentNetwork === 'testnet' ? <BuyerWalletPanel invoice={invoice} onPaid={setInvoice} /> : null}
+            {invoice.status === 'pending' && isMainnet ? <MainnetApprovalPanel invoice={invoice} /> : null}
+            {invoice.status === 'pending' && !isMainnet && import.meta.env.DEV && import.meta.env.VITE_ENABLE_INTERNAL_TESTNET === 'true'
+              ? <BuyerWalletPanel invoice={invoice} onPaid={setInvoice} /> : null}
 
-            {invoice.status === 'paid' && paymentNetwork === 'testnet' ? (
+            {invoice.status === 'paid' ? (
               <PaymentReceipt invoice={invoice} role="buyer" />
             ) : null}
 
-            {invoice.status === 'paid' && paymentNetwork === 'testnet' ? (
+            {invoice.status === 'paid' ? (
               <PaymentHistoryPanel
                 address={address}
-                canRead={isConnected && chainId === xLayerTestnet.id && Boolean(address)}
+                canRead={isConnected && chainId === (isMainnet ? xLayerMainnet.id : xLayerTestnet.id) && Boolean(address)}
                 view="buyer"
                 onOpenInvoice={onOpenBuyerInvoice}
               />
@@ -1503,14 +1511,17 @@ function BuyerCheckoutPage({ invoiceId, paymentNetwork, onBack, onOpenBuyerInvoi
               </div>
               <div className="flex justify-between gap-4">
                 <dt className="text-ink/45">Network</dt>
-                <dd>{paymentNetwork === 'mainnet' ? 'X Layer Mainnet · 196' : 'X Layer Testnet · 1952'}</dd>
+                <dd>{paymentNetworkLabel(effectiveNetwork)}</dd>
               </div>
               <div className="flex justify-between gap-4">
                 <dt className="text-ink/45">Invoice ID</dt>
                 <dd className="max-w-[16rem] break-all text-right font-mono text-xs">{invoice.id}</dd>
               </div>
             </dl>
-            <p className="mt-6 text-center text-xs leading-5 text-ink/40">{paymentNetwork === 'mainnet' ? 'Mainnet approval only · final swap remains disabled.' : 'Testnet demonstration · Demo portfolio assets are not backed by real shares.'}</p>
+            <p className="mt-6 text-center text-xs leading-5 text-ink/40">{isMainnet ? 'Mainnet exact-approval preparation only · final swap remains disabled.' : 'Legacy internal testnet record.'}</p>
+                </>
+              );
+            })()}
           </div>
         ) : null}
       </div>
@@ -1559,6 +1570,8 @@ function MerchantInvoicePage({ invoiceId, onBack }: { invoiceId: string; onBack:
       active = false;
     };
   }, [invoiceId]);
+
+  const invoiceNetwork = invoice ? getInvoicePaymentNetwork(invoice) : 'x-layer-mainnet';
 
   return (
     <section className="portpay-appear flex flex-1 items-center justify-center py-8 sm:py-12">
@@ -1611,7 +1624,7 @@ function MerchantInvoicePage({ invoiceId, onBack }: { invoiceId: string; onBack:
 
             <dl className="mt-6 grid gap-4 border-t border-ink/10 pt-5 text-sm sm:grid-cols-2">
               <div className="flex justify-between gap-4"><dt className="text-ink/45">Merchant wallet</dt><dd className="font-mono">{shortenAddress(invoice.merchantAddress)}</dd></div>
-              <div className="flex justify-between gap-4"><dt className="text-ink/45">Network</dt><dd>X Layer Testnet · 1952</dd></div>
+              <div className="flex justify-between gap-4"><dt className="text-ink/45">Network</dt><dd>{paymentNetworkLabel(invoiceNetwork)}</dd></div>
               <div className="flex justify-between gap-4"><dt className="text-ink/45">Invoice ID</dt><dd className="max-w-[18rem] break-all text-right font-mono text-xs">{invoice.id}</dd></div>
             </dl>
           </div>
@@ -1622,7 +1635,8 @@ function MerchantInvoicePage({ invoiceId, onBack }: { invoiceId: string; onBack:
 }
 
 function PaymentReceipt({ invoice, role }: { invoice: Invoice; role: 'buyer' | 'merchant' }) {
-  const explorerUrl = getExplorerTransactionUrl(invoice.paymentTxHash);
+  const paymentNetwork = getInvoicePaymentNetwork(invoice);
+  const explorerUrl = getExplorerTransactionUrl(invoice.paymentTxHash, paymentNetwork);
   const evidenceComplete = hasVerifiedPaymentEvidence(invoice);
   const isBuyer = role === 'buyer';
 
@@ -1648,7 +1662,7 @@ function PaymentReceipt({ invoice, role }: { invoice: Invoice; role: 'buyer' | '
       </div>
 
       <p className="mt-5 text-sm leading-6 text-emerald-950">
-        Confirmed from the canonical PortPay settlement receipt on X Layer Testnet. This is a portfolio settlement, not a DEX swap or market-price statement.
+        Confirmed from PortPay's persisted, canonical settlement evidence on {paymentNetworkLabel(paymentNetwork)}.
       </p>
 
       <dl className="mt-6 grid gap-x-6 gap-y-4 border-t border-emerald-900/10 pt-5 text-sm sm:grid-cols-2">
@@ -1676,7 +1690,7 @@ function PaymentReceipt({ invoice, role }: { invoice: Invoice; role: 'buyer' | '
         <div>
           <dt className="text-emerald-900/55">Settlement asset</dt>
           <dd className="mt-1 font-semibold text-emerald-950">
-            USD₮0{isOfficialSettlementAsset(portPayNetworkConfig.stablecoinAddress) ? ' · official X Layer Testnet token' : ''}
+            USD₮0{isOfficialSettlementAsset(paymentNetwork === 'x-layer-mainnet' ? mainnetNetworkConfig.usdt0Address : internalTestnetNetworkConfig.stablecoinAddress, paymentNetwork) ? ` · verified ${paymentNetwork === 'x-layer-mainnet' ? 'Mainnet' : 'legacy testnet'} token` : ''}
           </dd>
         </div>
         <div>
@@ -1740,7 +1754,7 @@ function AppShell({ children }: { children: React.ReactNode }) {
             <a className="rounded-lg px-2 py-1.5 transition hover:bg-white hover:text-ink" href="/merchant">Merchant</a>
             <a className="rounded-lg px-2 py-1.5 transition hover:bg-white hover:text-ink" href="/docs">Docs</a>
             <span className="rounded-full border border-ink/10 bg-white/70 px-3 py-1.5 text-[10px] font-bold uppercase tracking-[0.14em] text-ink/60">
-              <span className="hidden sm:inline">X Layer Testnet · </span>1952
+              <span className="hidden sm:inline">X Layer Mainnet · </span>196
             </span>
           </nav>
         </header>
@@ -1749,7 +1763,7 @@ function AppShell({ children }: { children: React.ReactNode }) {
 
         <footer className="flex flex-col gap-2 border-t border-ink/10 py-6 text-xs leading-5 text-ink/45 sm:flex-row sm:items-center sm:justify-between">
           <span>PortPay · customers spend portfolios, merchants receive stablecoins</span>
-          <span>DemoAAPL + DemoNVDA are demo assets, not real shares.</span>
+          <span>Mainnet swap execution remains disabled pending final security review and authorization.</span>
         </footer>
       </div>
     </main>
@@ -1761,7 +1775,6 @@ const docsNavigation = [
   { slug: 'getting-started', label: 'Getting started', href: '/docs/getting-started' },
   { slug: 'how-it-works', label: 'How it works', href: '/docs/how-it-works' },
   { slug: 'merchant-integration', label: 'Merchant integration', href: '/docs/merchant-integration' },
-  { slug: 'testnet', label: 'Testnet', href: '/docs/testnet' },
 ] as const;
 
 function DocsSection({ title, children }: { title: string; children: React.ReactNode }) {
@@ -1793,7 +1806,7 @@ function DocumentationPage({ slug }: { slug: 'index' | 'getting-started' | 'how-
             ))}
           </nav>
           <div className="mt-5 rounded-2xl border border-mint/40 bg-mint/25 p-4 text-xs leading-5 text-ink/65">
-            Testnet first. Mainnet settlement remains an isolated future adapter.
+            X Layer Mainnet is the product network. Buyer-signed swap execution remains disabled pending final review and authorization.
           </div>
         </aside>
 
@@ -1812,15 +1825,16 @@ function DocumentationPage({ slug }: { slug: 'index' | 'getting-started' | 'how-
             {slug === 'index' ? (
               <>
                 <DocsSection title="A payment method for tokenized portfolios">
-                  <p>Businesses request payment in stablecoins. Customers choose an xStock from their portfolio, PortPay handles the payment flow, and both sides receive an onchain-verifiable receipt.</p>
+                  <p>Businesses request payment in real USD₮0. Customers choose a supported tokenized asset; when execution is authorized, both sides receive receipts backed by verified onchain evidence.</p>
                   <p>Merchants can use the dashboard for payment links or integrate PortPay into their existing checkout through the server-side invoice API and hosted buyer checkout.</p>
                 </DocsSection>
                 <DocsSection title="The two-sided flow">
                   <div className="grid gap-3 sm:grid-cols-3">
-                    {['Merchant creates a stablecoin invoice', 'Buyer pays from a portfolio asset', 'Both sides see a verified receipt'].map((step, index) => (
+                    {['Merchant creates a stablecoin invoice', 'Buyer reviews a supported portfolio asset', 'Verified receipts follow an authorized settlement'].map((step, index) => (
                       <div key={step} className="rounded-xl bg-cloud p-4"><span className="font-mono text-xs text-ink/40">0{index + 1}</span><p className="mt-2 font-semibold text-ink">{step}</p></div>
                     ))}
                   </div>
+                  <p>Mainnet checkout is currently limited to preparation and the separately authorized exact approval. Buyer-signed swap execution is disabled pending final review and explicit authorization.</p>
                 </DocsSection>
               </>
             ) : null}
@@ -1831,31 +1845,30 @@ function DocumentationPage({ slug }: { slug: 'index' | 'getting-started' | 'how-
                   {[
                     'Merchant creates a stablecoin invoice.',
                     'PortPay generates a unique hosted payment link.',
-                    'Buyer opens checkout and connects OKX Wallet on X Layer Testnet.',
-                    'Buyer reviews Smart Spend or manually selects a supported demo portfolio asset.',
-                    'PortPay prepares the exact signed quote and executes portfolio settlement.',
-                    'Merchant receives official testnet USD₮0 after verified reconciliation.',
+                    'Buyer opens checkout and connects OKX Wallet on X Layer Mainnet.',
+                    'Buyer reviews supported wNVDAx/wAAPLx details and any allowed exact approval.',
+                    'PortPay prepares a direct-to-merchant OKX DEX route; final swap execution is currently disabled.',
+                    'After authorization, merchant settlement will be reconciled from canonical mainnet evidence.',
                     'Buyer and merchant receive role-specific receipts from the same persisted settlement evidence.',
                   ].map((step, index) => <li key={step} className="flex gap-3"><span className="grid h-6 w-6 shrink-0 place-items-center rounded-full bg-ink text-xs font-bold text-mint">{index + 1}</span><span>{step}</span></li>)}
                 </ol>
-                <p><strong className="text-ink">Current:</strong> the testnet implementation uses DemoAAPL, DemoNVDA, official testnet USD₮0, and `TestnetSettlementAdapter` on chain 1952.</p>
-                <p><strong className="text-ink">Planned:</strong> real xStock mainnet execution remains isolated behind the future `OKXDEXMainnetAdapter` on chain 196.</p>
+                <p><strong className="text-ink">Current product configuration:</strong> X Layer Mainnet, supported wNVDAx/wAAPLx, real USD₮0, separate mainnet Builder Code, and the isolated `OKXDEXMainnetAdapter`. Mainnet swap writes are disabled pending final Sol High review and explicit authorization.</p>
               </DocsSection>
             ) : null}
 
             {slug === 'getting-started' ? (
               <>
-                <DocsSection title="Reproduce the two-tab demo">
+                <DocsSection title="Open the merchant and buyer flow">
                   <ol className="space-y-2">
                     <li>1. Start the backend on `http://localhost:3001` and frontend on `http://localhost:5173`.</li>
-                    <li>2. Open `/merchant`, connect the merchant OKX Wallet on X Layer Testnet, and create a small USD₮0 invoice.</li>
+                    <li>2. Open `/merchant`, connect the merchant OKX Wallet on X Layer Mainnet, and create an invoice denominated in real USD₮0.</li>
                     <li>3. Copy the generated `/pay/:invoiceId` link into a separate buyer tab.</li>
-                    <li>4. Connect the buyer wallet, review the exact quote, choose Smart Pay or a manual asset, then approve and settle.</li>
-                    <li>5. Return to the merchant invoice route to show Payment received, the receipt, and the explorer evidence.</li>
+                    <li>4. Connect the buyer wallet, review the supported tokenized asset and any exact approval preparation.</li>
+                    <li>5. Final swap execution is disabled; do not represent a pending invoice as paid.</li>
                   </ol>
                 </DocsSection>
                 <DocsSection title="What you need">
-                  <p>OKX Wallet, X Layer Testnet (chain 1952), test OKB for gas, DemoAAPL or DemoNVDA, and official testnet USD₮0 liquidity in the funded settlement contract.</p>
+                  <p>OKX Wallet on X Layer Mainnet (chain 196), mainnet OKB for gas, supported wNVDAx/wAAPLx, and real USD₮0. The final buyer-signed swap is not enabled yet.</p>
                   <p>Apply the Supabase migrations and configure backend secrets locally. Browser code never receives the Supabase service-role key or merchant API secrets.</p>
                 </DocsSection>
               </>
@@ -1866,6 +1879,7 @@ function DocumentationPage({ slug }: { slug: 'index' | 'getting-started' | 'how-
                 <DocsSection title="Hosted checkout for existing businesses">
                   <p>Your business does not need to hold or manage xStocks. Price products normally in stablecoins, create an invoice from your backend, redirect the customer to the hosted PortPay checkout, and fulfill after verified status or webhook confirmation.</p>
                   <p>Merchants can use the dashboard for payment links, or integrate invoice creation and payment confirmation into their own website.</p>
+                  <p><strong className="text-ink">Current limitation:</strong> Mainnet buyer-signed swaps remain disabled. Checkout can prepare and request the separately authorized exact approval only; merchants must not treat approval as payment or fulfill an unpaid invoice.</p>
                 </DocsSection>
                 <DocsSection title="1. Create an invoice from your server">
                   <p>Use a test API key in the `Authorization` header. Keep this request server-side; never put the key in browser code.</p>
@@ -1889,13 +1903,13 @@ function DocumentationPage({ slug }: { slug: 'index' | 'getting-started' | 'how-
 
             {slug === 'testnet' ? (
               <>
-                <DocsSection title="X Layer Testnet boundary">
+                <DocsSection title="Internal X Layer Testnet regression boundary">
                   <p>Network: X Layer Testnet, chain ID `1952`, native gas token OKB. The demo assets are ordinary ERC-20 test assets used to safely demonstrate the xStock payment experience. They are not real shares or backed securities.</p>
                   <p>DemoAAPL: `0x756546fce7d7ca3bb4be127904b002baf13b432e` · DemoNVDA: `0xa0c469d4419446c21a1d992c0a1c3cdc09bbcc4e` · official testnet USD₮0: `0x9e29b3aada05bf2d2c827af80bd28dc0b9b4fb0c`.</p>
                 </DocsSection>
                 <DocsSection title="Builder Codes and evidence">
                   <p>PortPay attaches the registered Builder Code `kob1lkgsg6infkg3` to eligible approval and settlement transactions. The registry payout resolves to the buyer test wallet recorded in the README evidence.</p>
-                  <p>Verified Phase 3 and Phase 6 transaction links, settlement contract addresses, and confirmation details remain documented in the repository README. No mainnet transaction is required for this demo.</p>
+                  <p>Historical testnet transaction links and confirmation details remain in the README for audit/compatibility. This page is only available in explicitly enabled local development.</p>
                 </DocsSection>
               </>
             ) : null}
@@ -1946,13 +1960,22 @@ function BuilderCodeDebugPage() {
 }
 
 export default function App() {
-  const [route, setRoute] = useState<InvoiceRoute>(() => readInvoiceRoute(window.location.pathname, window.location.search));
+  const allowInternalTestnet = import.meta.env.DEV && import.meta.env.VITE_ENABLE_INTERNAL_TESTNET === 'true';
+  const [route, setRoute] = useState<InvoiceRoute>(() => readInvoiceRoute(
+    window.location.pathname,
+    window.location.search,
+    { allowInternalTestnet },
+  ));
 
   useEffect(() => {
-    const onPopState = () => setRoute(readInvoiceRoute(window.location.pathname, window.location.search));
+    const onPopState = () => setRoute(readInvoiceRoute(
+      window.location.pathname,
+      window.location.search,
+      { allowInternalTestnet },
+    ));
     window.addEventListener('popstate', onPopState);
     return () => window.removeEventListener('popstate', onPopState);
-  }, []);
+  }, [allowInternalTestnet]);
 
   function openMerchantInvoice(invoiceId: string) {
     window.history.pushState({}, '', `/merchant/invoices/${encodeURIComponent(invoiceId)}`);
@@ -1961,7 +1984,7 @@ export default function App() {
 
   function openBuyerInvoice(invoiceId: string) {
     window.history.pushState({}, '', `/pay/${encodeURIComponent(invoiceId)}`);
-    setRoute({ type: 'pay', invoiceId, paymentNetwork: 'testnet' });
+    setRoute({ type: 'pay', invoiceId, paymentNetwork: 'mainnet' });
   }
 
   function openDashboard() {

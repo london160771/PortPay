@@ -1,7 +1,23 @@
 import { formatUnits, isAddress } from 'viem';
-import type { Invoice } from './api';
-import { portfolioAssets } from './assets';
-import { portPayNetworkConfig, VERIFIED_TESTNET_USDT0_ADDRESS } from './network';
+import type { Invoice, PaymentNetwork } from './api';
+import { mainnetAssets, portfolioAssets } from './assets';
+import {
+  mainnetNetworkConfig,
+  internalTestnetNetworkConfig,
+  VERIFIED_MAINNET_USDT0_ADDRESS,
+  VERIFIED_TESTNET_USDT0_ADDRESS,
+} from './network';
+
+export function getInvoicePaymentNetwork(invoice: Invoice): PaymentNetwork {
+  if (invoice.paymentNetwork) return invoice.paymentNetwork;
+  // All pre-network-field paid records were testnet receipts. Preserve that history
+  // rather than ever relabeling a legacy transaction as a mainnet payment.
+  return invoice.status === 'paid' || invoice.paymentTxHash ? 'x-layer-testnet' : 'x-layer-mainnet';
+}
+
+export function paymentNetworkLabel(network: PaymentNetwork): string {
+  return network === 'x-layer-mainnet' ? 'X Layer Mainnet · 196' : 'Legacy X Layer Testnet · 1952';
+}
 
 function displayDecimal(value: string | number): string {
   const normalized = String(value);
@@ -12,7 +28,7 @@ function displayDecimal(value: string | number): string {
 export function formatSpentAmount(invoice: Invoice): string {
   if (typeof invoice.spentAmount !== 'string' || !/^\d+$/.test(invoice.spentAmount)) return 'Amount unavailable';
 
-  const knownAsset = Object.values(portfolioAssets).find((asset) =>
+  const knownAsset = [...Object.values(mainnetAssets).slice(0, 2), ...Object.values(portfolioAssets)].find((asset) =>
     invoice.spentAsset && isAddress(invoice.spentAsset) && asset.address
       && invoice.spentAsset.toLowerCase() === asset.address.toLowerCase());
   if (knownAsset) {
@@ -39,16 +55,21 @@ export function formatPaymentTimestamp(value: string | undefined): string {
   return Number.isNaN(timestamp.getTime()) ? 'Timestamp unavailable' : timestamp.toLocaleString();
 }
 
-export function getExplorerTransactionUrl(transactionHash: string | undefined): string | undefined {
+export function getExplorerTransactionUrl(
+  transactionHash: string | undefined,
+  network: PaymentNetwork = 'x-layer-mainnet',
+): string | undefined {
   if (!transactionHash || !/^0x[a-fA-F0-9]{64}$/.test(transactionHash)) return undefined;
-  return `${portPayNetworkConfig.explorerUrl}/tx/${transactionHash}`;
+  const explorerUrl = network === 'x-layer-mainnet' ? mainnetNetworkConfig.explorerUrl : internalTestnetNetworkConfig.explorerUrl;
+  return `${explorerUrl}/tx/${transactionHash}`;
 }
 
 export function hasVerifiedPaymentEvidence(invoice: Invoice): boolean {
+  const paymentNetwork = getInvoicePaymentNetwork(invoice);
   return Boolean(
     invoice.status === 'paid' &&
       invoice.paymentTxHash &&
-      getExplorerTransactionUrl(invoice.paymentTxHash) &&
+      getExplorerTransactionUrl(invoice.paymentTxHash, paymentNetwork) &&
       invoice.paidAt &&
       invoice.buyerAddress &&
       invoice.spentAsset &&
@@ -60,6 +81,7 @@ export function hasVerifiedPaymentEvidence(invoice: Invoice): boolean {
   );
 }
 
-export function isOfficialSettlementAsset(address: string | undefined): boolean {
-  return Boolean(address && address.toLowerCase() === VERIFIED_TESTNET_USDT0_ADDRESS.toLowerCase());
+export function isOfficialSettlementAsset(address: string | undefined, network: PaymentNetwork = 'x-layer-mainnet'): boolean {
+  const expected = network === 'x-layer-mainnet' ? VERIFIED_MAINNET_USDT0_ADDRESS : VERIFIED_TESTNET_USDT0_ADDRESS;
+  return Boolean(address && address.toLowerCase() === expected.toLowerCase());
 }

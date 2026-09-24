@@ -15,7 +15,7 @@ const spender = '0x8b773d83bc66be128c60e07e17c8901f7a64f000' as Address;
 const amount = '2965213342702937';
 const invoice: Invoice = {
   id: '00000000-0000-4000-8000-000000000001', title: 'Preflight invoice', amountUsdt0: '1', merchantAddress: merchant,
-  paymentUrl: 'https://pay.example.test/pay/00000000-0000-4000-8000-000000000001', status: 'pending',
+  paymentUrl: 'https://pay.example.test/pay/00000000-0000-4000-8000-000000000001', status: 'pending', paymentNetwork: 'x-layer-mainnet',
   createdAt: '2026-09-21T00:00:00.000Z', updatedAt: '2026-09-21T00:00:00.000Z',
 };
 const swapAbi = parseAbi(['function dagSwapTo(uint256 orderId, address receiver, (uint256 fromToken, address toToken, uint256 fromTokenAmount, uint256 minReturnAmount, uint256 deadLine) baseRequest, (address[] mixAdapters, address[] assetTo, uint256[] rawData, bytes[] extraData, uint256 fromToken)[] paths) payable returns (uint256)']);

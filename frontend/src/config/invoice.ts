@@ -6,7 +6,11 @@ export type InvoiceRoute =
   | { type: 'pay'; invoiceId: string; paymentNetwork: 'testnet' | 'mainnet' }
   | { type: 'docs'; slug: 'index' | 'getting-started' | 'how-it-works' | 'merchant-integration' | 'testnet' };
 
-export function readInvoiceRoute(pathname: string, search = ''): InvoiceRoute {
+export function readInvoiceRoute(
+  pathname: string,
+  search = '',
+  options: { allowInternalTestnet?: boolean } = {},
+): InvoiceRoute {
   if (pathname === '/' || pathname === '/merchant' || pathname === '/merchant/') return { type: 'dashboard' };
 
   const merchantMatch = pathname.match(/^\/merchant\/invoices(?:\/([^/]+))?\/?$/);
@@ -20,7 +24,9 @@ export function readInvoiceRoute(pathname: string, search = ''): InvoiceRoute {
 
   const payMatch = pathname.match(/^\/(?:pay|invoice)(?:\/([^/]+))?\/?$/);
   if (payMatch) {
-    const paymentNetwork = new URLSearchParams(search).get('network') === 'mainnet' ? 'mainnet' : 'testnet';
+    const paymentNetwork = options.allowInternalTestnet && new URLSearchParams(search).get('network') === 'testnet'
+      ? 'testnet'
+      : 'mainnet';
     try {
       return {
         type: 'pay',
@@ -35,7 +41,8 @@ export function readInvoiceRoute(pathname: string, search = ''): InvoiceRoute {
   const docsMatch = pathname.match(/^\/docs(?:\/([^/]+))?\/?$/);
   if (docsMatch) {
     const slug = docsMatch[1] || 'index';
-    if (slug === 'getting-started' || slug === 'how-it-works' || slug === 'merchant-integration' || slug === 'testnet') {
+    if (slug === 'getting-started' || slug === 'how-it-works' || slug === 'merchant-integration'
+      || (slug === 'testnet' && options.allowInternalTestnet)) {
       return { type: 'docs', slug };
     }
     return { type: 'docs', slug: 'index' };

@@ -25,7 +25,12 @@ export class InMemoryInvoiceRepository implements InvoiceRepository {
   private readonly invoices = new Map<string, Invoice>();
 
   async create(invoice: Invoice): Promise<Invoice> {
-    const stored = { ...invoice, id: invoice.id || randomUUID() };
+    const stored: Invoice = {
+      ...invoice,
+      id: invoice.id || randomUUID(),
+      paymentNetwork: invoice.paymentNetwork
+        ?? (invoice.status === 'paid' || invoice.paymentTxHash ? 'x-layer-testnet' : 'x-layer-mainnet'),
+    };
     this.invoices.set(stored.id, stored);
     return stored;
   }
@@ -63,6 +68,7 @@ export class InMemoryInvoiceRepository implements InvoiceRepository {
     const updated: Invoice = {
       ...invoice,
       status: 'paid',
+      paymentNetwork: evidence.paymentNetwork,
       updatedAt: evidence.paidAt,
       paymentTxHash: evidence.paymentTxHash,
       paidAt: evidence.paidAt,
@@ -90,6 +96,7 @@ export type InvoiceRow = {
   external_order_reference: string | null;
   payment_url: string;
   status: Invoice['status'];
+  payment_network?: string | null;
   created_at: string;
   updated_at: string;
   payment_tx_hash: string | null;
@@ -114,6 +121,7 @@ const INVOICE_SELECT = `
   external_order_reference,
   payment_url,
   status,
+  payment_network,
   created_at,
   updated_at,
   payment_tx_hash,
@@ -144,6 +152,7 @@ export class SupabaseInvoiceRepository implements InvoiceRepository {
         external_order_reference: invoice.externalOrderReference ?? null,
         payment_url: invoice.paymentUrl,
         status: invoice.status,
+        payment_network: invoice.paymentNetwork ?? 'x-layer-mainnet',
         created_at: invoice.createdAt,
         updated_at: invoice.updatedAt,
       })
@@ -196,6 +205,7 @@ export class SupabaseInvoiceRepository implements InvoiceRepository {
       .from('invoices')
       .update({
         status: 'paid',
+        payment_network: evidence.paymentNetwork,
         updated_at: evidence.paidAt,
         payment_tx_hash: evidence.paymentTxHash,
         paid_at: evidence.paidAt,
@@ -235,6 +245,11 @@ export function mapInvoiceRow(row: InvoiceRow): Invoice {
   const settlementBlockNumber = exactNumericText(row.settlement_block_number, 'settlement_block_number');
   if (amountUsdt0 === undefined) throw new InvoicePersistenceError('amount_usdt0 is required.');
 
+  const paymentNetwork = row.payment_network ?? 'x-layer-testnet';
+  if (paymentNetwork !== 'x-layer-mainnet' && paymentNetwork !== 'x-layer-testnet') {
+    throw new InvoicePersistenceError('Invoice row contains an unsupported payment_network value.');
+  }
+
   return {
     id: row.id,
     title: row.title,
@@ -243,6 +258,7 @@ export function mapInvoiceRow(row: InvoiceRow): Invoice {
     ...(row.external_order_reference ? { externalOrderReference: row.external_order_reference } : {}),
     paymentUrl: row.payment_url,
     status: row.status,
+    paymentNetwork,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     ...(row.payment_tx_hash ? { paymentTxHash: row.payment_tx_hash } : {}),

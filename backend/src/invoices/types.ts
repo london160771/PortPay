@@ -1,5 +1,6 @@
 export const invoiceStatuses = ['pending', 'paid'] as const;
 export type InvoiceStatus = (typeof invoiceStatuses)[number];
+export type PaymentNetwork = 'x-layer-testnet' | 'x-layer-mainnet';
 
 export type Invoice = {
   id: string;
@@ -9,6 +10,7 @@ export type Invoice = {
   externalOrderReference?: string;
   paymentUrl: string;
   status: InvoiceStatus;
+  paymentNetwork?: PaymentNetwork;
   createdAt: string;
   updatedAt: string;
   paymentTxHash?: string;
@@ -26,6 +28,7 @@ export type Invoice = {
 };
 
 export type PaymentEvidence = {
+  paymentNetwork: PaymentNetwork;
   paymentTxHash: string;
   paidAt: string;
   buyerAddress: string;

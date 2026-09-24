@@ -1,7 +1,7 @@
 # PortPay — Source-of-Truth Product and Technical Specification
 
-**Status:** Baseline source of truth  
-**Last updated:** 2026-09-21
+**Status:** Current source of truth
+**Last updated:** 2026-09-24
 **Repository:** <https://github.com/london160771/PortPay>  
 **Builder Kit reference:** <https://www.okx.com/learn/okx-dev-day-builder-kit>
 
@@ -12,6 +12,16 @@ This document is the product, architecture, scope, and phase-plan authority for 
 **Product:** PortPay  
 **Tagline:** Spend your portfolio. Merchants get stablecoins.  
 **Short description:** PortPay lets buyers pay with tokenized portfolio assets while merchants receive stablecoins on X Layer.
+
+### Current network policy (2026-09-24)
+
+PortPay is now **Mainnet-first**. X Layer Mainnet (chain ID `196`) is the only network shown or selected by normal product routes. `/merchant`, `/pay/:invoiceId`, merchant invoice details, receipts, and history resolve to the mainnet product configuration without a query-string network selector. Mainnet uses supported wNVDAx/wAAPLx assets, real USD₮0, and the separately registered mainnet Builder Code.
+
+This product default does **not** mean mainnet payments are fully live: buyer-signed mainnet swap execution remains disabled until the final GPT-5.6 Sol High review passes and the user separately authorizes execution. The existing exact, manual mainnet approval exception remains bounded by the current authority rules; it does not enable a swap or make an invoice paid.
+
+X Layer Testnet (chain ID `1952`), `TestnetSettlementAdapter`, DemoAAPL/DemoNVDA, test USD₮0, and the testnet Builder Code are retained only for automated regression, historical receipt compatibility, and explicitly enabled internal development/test tooling. They must not appear in normal production routes or product UI. Legacy testnet payment records remain readable and retain their testnet explorer/network identity.
+
+The testnet adapter returns verified settlement facts without assigning the invoice network. The shared invoice-reconciliation boundary attaches `x-layer-testnet` only after confirming both a chain-1952 invoice and `TestnetSettlementAdapter`; this metadata boundary does not alter adapter settlement behavior.
 
 ### Problem
 
@@ -29,22 +39,22 @@ The following are required features, not optional ideas:
 
 1. **Merchant invoice and payment-link flow** — a merchant enters a product or service name and stablecoin amount, creates an invoice, and receives a shareable payment link. A QR presentation may be added if it is trivial, but the payment link is required.
 2. **Buyer checkout** — the buyer opens the link, connects a wallet, sees the amount due and supported assets, selects an asset, reviews the quote, and approves payment.
-3. **Testnet portfolio settlement** — the buyer pays with a demo tokenized asset and the merchant receives official X Layer Testnet `USD₮0`.
+3. **Mainnet portfolio payment architecture** — the intended product payment uses supported tokenized assets and directs real USD₮0 to the merchant through the isolated `OKXDEXMainnetAdapter`; execution remains disabled pending final review and explicit authorization.
 4. **Merchant stablecoin receipt** — the merchant dashboard updates to show payment received, amount received, asset spent, status, and transaction link.
 5. **Smart Spend** — deterministic portfolio-aware recommendation of which supported asset to spend. This begins with `DemoAAPL` and adds `DemoNVDA` only after the core payment flow works.
 6. **Smart Payment History** — a clear history of what the buyer spent, what the merchant received, why Smart Spend made a recommendation, payment status, and the X Layer transaction.
 7. **OKX/X Layer Builder Codes** — PortPay-generated eligible transactions must carry the registered Builder Code attribution using the current OKX/X Layer Builder Codes mechanism, including ERC-8021 requirements where applicable.
-8. **Two-sided demo** — the judge can see a merchant tab create an invoice and a separate buyer tab complete checkout, then return to the merchant tab to see the receipt.
+8. **Two-sided flow** — a merchant creates an invoice and shares hosted buyer checkout; until mainnet execution is authorized, the UI must make the preparation-only state explicit and must not imply a completed payment.
 
-### Asset progression
+### Asset/network history and retained regression scope
 
 - **Phase 1 — Wallet + Demo Assets:** prepare one ordinary EVM ERC-20 demo asset named `DemoAAPL` and the wallet/balance foundation needed to use it later.
 - **Phase 3 — Core Settlement:** implement the smallest safe `PortPaySettlement` flow around the configured demo asset and official testnet `USD₮0`.
 - **Smart Spend phase:** add a second ordinary EVM ERC-20 demo asset named `DemoNVDA` so a recommendation has a meaningful choice.
 - **Do not initially create:** `DemoSPY`, a large asset catalog, official testnet xStocks, or a liquidity pool.
 - `DemoAAPL` and `DemoNVDA` are clearly labeled demo assets and must never be presented as backed by Apple or NVIDIA shares.
-- Use official X Layer Testnet `USD₮0` for merchant settlement. Do not create a replacement stablecoin for the MVP.
-- Use test OKB for gas through the official X Layer Testnet faucet/process.
+- Mainnet product assets are wNVDAx/wAAPLx and official X Layer Mainnet USD₮0.
+- DemoAAPL/DemoNVDA and official testnet USD₮0 remain internal regression/history assets only. Do not create a replacement stablecoin.
 
 ## 3. Product experience
 
@@ -70,19 +80,18 @@ The following are required features, not optional ideas:
 4. **Buyer checkout**
    - Invoice/product name and amount due.
    - Wallet connection.
-   - Supported balances: initially `DemoAAPL`; later `DemoNVDA` and `USD₮0` where useful for display.
+   - Supported balances: mainnet wNVDAx/wAAPLx and real USD₮0 where useful for display.
    - Manual asset selection and Smart Spend recommendation when Smart Spend is available.
    - A clear quote such as:
 
      ```text
-     You spend: 0.0800 DemoAAPL
+     You spend: 0.0800 wNVDAx
      Merchant receives: 20.00 USD₮0
-     Network: X Layer Testnet
-     Demo reference price: 250.00 USD
+     Network: X Layer Mainnet
      ```
 
-   - Explicit **Demo asset — not backed by real shares** and **Testnet** labels.
-   - Approve and pay action followed by confirmation state.
+   - Mainnet network and supported-asset labels; no demo/testnet assets in normal UI.
+   - Exact manual approval only where currently authorized. No final swap or paid confirmation while buyer-signed execution is disabled.
 
 5. **Payment receipt and Smart Payment History**
    - Success state with buyer asset amount, merchant stablecoin amount, invoice, status, timestamp, and transaction hash.
@@ -136,7 +145,7 @@ Smart Payment History is more than a list of hashes. Each completed or attempted
 - status: created, awaiting payment, pending, confirmed, expired, failed, or rejected;
 - transaction hash, block/explorer link, and timestamps;
 - contract and network identifiers;
-- a clear testnet/demo label.
+- `payment_network` and network-correct explorer identity. Legacy testnet/demo records remain clearly labeled as historical testnet records; new normal product records use mainnet.
 
 The history should make it easy to answer: **what did the buyer spend, what did the merchant receive, why was that asset selected, and which X Layer transaction proves it?**
 
@@ -148,8 +157,8 @@ The history should make it easy to answer: **what did the buyer spend, what did 
 - **Wallet and chain client:** `wagmi` + `viem`.
 - **Backend:** Node.js + Express + TypeScript.
 - **MVP persistence:** Supabase/Postgres behind a repository/data-access boundary. Supabase is the required hosted Postgres provider for PortPay; SQLite is not an implementation option.
-- **Chain:** X Layer Testnet first, chain ID `1952`.
-- **Future chain:** X Layer Mainnet, chain ID `196`, only in the optional mainnet phase.
+- **Product chain:** X Layer Mainnet, chain ID `196`.
+- **Internal regression chain:** X Layer Testnet, chain ID `1952`, not exposed by production routes or normal UI.
 
 ### Components
 
@@ -161,8 +170,8 @@ The history should make it easy to answer: **what did the buyer spend, what did 
 | `DemoNVDA` | Second small ordinary EVM ERC-20 test asset added for Smart Spend |
 | `PortPaySettlement` | Minimal onchain testnet settlement contract |
 | Official testnet `USD₮0` | Merchant settlement asset; do not replace with an app-created stablecoin |
-| `TestnetSettlementAdapter` | Adapter that executes the prefunded testnet settlement-contract flow |
-| `OKXDEXMainnetAdapter` | Future adapter for the OKX DEX Swap API and real mainnet xStock routes |
+| `TestnetSettlementAdapter` | Internal chain-1952 regression and legacy-compatibility adapter; never selected by normal production routes |
+| `OKXDEXMainnetAdapter` | Isolated chain-196 adapter for supported tokenized assets and direct real-USD₮0 merchant routing; buyer-signed swap execution remains disabled pending review/authorization |
 | Builder Code integration | App-side attribution for eligible PortPay-generated transactions |
 
 ### Canonical names
@@ -175,13 +184,14 @@ Use these names exactly in code, docs, UI copy, and reports:
 - Future mainnet adapter: `OKXDEXMainnetAdapter`.
 - First demo asset: `DemoAAPL`.
 - Smart Spend asset: `DemoNVDA`.
-- Official testnet stablecoin: `USD₮0`.
+- Mainnet stablecoin: `USD₮0`.
+- Internal regression tokens: `DemoAAPL`, `DemoNVDA`, and testnet `USD₮0`.
 
 `PortfolioPay` is an obsolete working name from early ideation. Do not introduce it in new files, identifiers, UI, contract names, or README text.
 
-## 7. Testnet settlement design
+## 7. Retained internal testnet settlement design
 
-Public OKX DEX routing is not assumed to be available for X Layer Testnet. Therefore the testnet MVP uses **portfolio settlement**, also describable as **testnet simulated RWA conversion**, rather than a DEX swap.
+Public OKX DEX routing is not assumed to be available for X Layer Testnet. The retained chain-1952 regression implementation uses **portfolio settlement**, also describable as **testnet simulated RWA conversion**, rather than a DEX swap. It is not the normal product payment path and must not be selected by production routes.
 
 ### Testnet flow
 
@@ -236,17 +246,17 @@ Builder Codes are a required OKX integration, not a cosmetic mention.
 - Add a test or manual verification that the submitted transaction carries the expected attribution.
 - Do not invent a placeholder code and call the integration complete.
 
-## 9. Mainnet upgrade path — optional and later
+## 9. Mainnet product path and execution gate
 
-The mainnet path is intentionally separated from the required testnet MVP.
+The mainnet path is the normal PortPay product configuration and remains isolated from the retained testnet regression path.
 
-`OKXDEXMainnetAdapter` is the future replacement for `TestnetSettlementAdapter`. It may use the OKX DEX Swap API on X Layer Mainnet to route a real eligible xStock/unified tokenized stock into the merchant’s requested stablecoin, then produce the same PortPay receipt/history shape.
+`OKXDEXMainnetAdapter` uses the OKX DEX Swap API on X Layer Mainnet to prepare a route from a supported tokenized asset into real USD₮0 directly to the merchant, with shared invoice, receipt, and history layers above it. Mainnet is selected by normal routes; the adapter boundary remains network-specific.
 
 ### Mainnet Phase 1 — isolated adapter preparation
 
-The current mainnet implementation phase is preparation-only. It may add isolated chain-196 configuration, a server-side authenticated OKX V6 DEX API client, read-only quote/approval/swap transaction preparation, direct merchant-recipient validation, and ERC-8021 suffix preparation. It must not fund wallets, approve tokens, deploy contracts, register a mainnet Builder Code, broadcast transactions, or modify the proven testnet settlement path. Mainnet execution remains disabled until the adapter passes review and the user explicitly approves a live proof.
+The current mainnet adapter remains non-broadcasting. It may prepare authenticated chain-196 quotes and transaction data, validate direct merchant-recipient execution, and prepare ERC-8021 suffixes. It must not fund wallets, deploy contracts, register a mainnet Builder Code, sign or broadcast transactions, or modify the proven testnet settlement path. The separately scoped exact manual approval exception in Mainnet Phase 2 remains the only buyer-wallet write; mainnet swap execution stays disabled until review and explicit user authorization.
 
-The optional mainnet proof is allowed only when all of the following are true:
+Any future mainnet swap proof is allowed only when all of the following are true:
 
 - the user explicitly approves the mainnet test and provides/approves the funds;
 - the official xStock asset and OKX route are currently available and verified;
@@ -254,7 +264,7 @@ The optional mainnet proof is allowed only when all of the following are true:
 - wallet, slippage, approval, amount, contract, and failure handling are documented;
 - the README clearly distinguishes mainnet proof from the testnet demo.
 
-No mainnet money is required for the MVP. Do not make mainnet a hidden dependency of testnet development.
+Buyer-signed mainnet swap execution remains disabled until the final GPT-5.6 Sol High review passes and the user separately authorizes it. Testnet is not a prerequisite for normal product use and remains available only for automated regression, historical receipts, and explicit internal tooling.
 
 ### Mainnet Phase 2 — Builder Code registration, preflight, and receipt design
 
@@ -266,17 +276,29 @@ Mainnet Phase 2 remains preparation-only and isolated from the proven testnet fl
 - read-only `eth_call` simulation of the exact attributed approval and swap calldata;
 - a future mainnet receipt/reconciliation verifier and separate payment-state model.
 
-Narrow buyer-wallet approval exception (authorized as a scoped Mainnet Phase 2 follow-up): the existing `/pay/:invoiceId` checkout may expose a chain-196 approval action only for the exact approval returned by a fresh authenticated backend preparation. The opt-in URL is `/pay/:invoiceId?network=mainnet`; without that query, checkout remains on the existing chain-1952 flow. `POST /api/invoices/:invoiceId/mainnet/approval-preparation` accepts only the connected buyer address, uses the existing pending invoice and the backend-fixed proof input `4800000000000000` wNVDAx base units, obtains fresh authenticated OKX data, runs the existing complete preflight, and persists the immutable preparation. It returns approval bytes only after a successful Stage A simulation yields `APPROVAL_REQUIRED`; client-supplied amount, token, spender, quote, or calldata are never authority. The buyer must manually confirm through the connected wallet. Before opening the wallet prompt, the frontend must verify the connected buyer, chain 196, canonical mainnet token, invoice-bound preparation, preparation-bound spender and exact amount, minimum receive, attributed calldata/suffix, and preparation freshness. After confirmation it must verify the successful receipt and reread allowance for exact equality. This exception authorizes no transaction automatically, no backend signing/broadcast, and no swap. The mainnet checkout is opt-in and must never alter the default chain-1952 flow.
+Narrow buyer-wallet approval exception (authorized as a scoped Mainnet Phase 2 follow-up): normal `/pay/:invoiceId` may expose a chain-196 approval action only for the exact approval returned by a fresh authenticated backend preparation. No `?network=mainnet` selector is required. `POST /api/invoices/:invoiceId/mainnet/approval-preparation` accepts only the connected buyer address, uses the pending invoice and the backend-fixed proof input `4800000000000000` wNVDAx base units, obtains fresh authenticated OKX data, runs the existing complete preflight, and persists the immutable preparation. It returns approval bytes only after a successful Stage A simulation yields `APPROVAL_REQUIRED`; client-supplied amount, token, spender, quote, or calldata are never authority. The buyer must manually confirm through the connected wallet. Before opening the wallet prompt, the frontend must verify the connected buyer, chain 196, canonical mainnet token, invoice-bound preparation, preparation-bound spender and exact amount, minimum receive, attributed calldata/suffix, and preparation freshness. After confirmation it must verify the successful receipt and reread allowance for exact equality. This exception authorizes no transaction automatically, no backend signing/broadcast, and no swap. Testnet remains inaccessible from normal production routes.
 
-The official OKX Builder Codes documentation requires mainnet builders to use the OKX Developer Portal: connect the owning wallet, verify the address, and create the Builder Code. The documented `registerAuto` contract path is for X Layer Testnet registration; PortPay must not call it for mainnet. The official mainnet registry is `0xd6c426f9c077358735622ae5a83468dc0510823b`. PortPay converts the exact 16-character code to the deterministic registry token ID and reads `payoutAddress(uint256)` on chain `196`. A configured mainnet code is accepted only when its registry payout matches `PORTPAY_MAINNET_BUILDER_PAYOUT_ADDRESS`. `PORTPAY_MAINNET_BUILDER_CODE` remains empty until the user completes registration.
+The official OKX Builder Codes documentation requires mainnet builders to use the OKX Developer Portal: connect the owning wallet, verify the address, and create the Builder Code. The documented `registerAuto` contract path is for X Layer Testnet registration; PortPay must not call it for mainnet. The official mainnet registry is `0xd6c426f9c077358735622ae5a83468dc0510823b`. PortPay converts the exact 16-character code to the deterministic registry token ID and reads `payoutAddress(uint256)` on chain `196`. A configured mainnet code is accepted only when its registry payout matches `PORTPAY_MAINNET_BUILDER_PAYOUT_ADDRESS`. These non-secret config values must match the separately registered, independently verified mainnet code/payout; never reuse the testnet code.
 
 Preflight must fail closed unless chain `196`, buyer, merchant, invoice, input/output tokens, exact input, minimum output, slippage, quote freshness, router, spender, approval calldata, swap calldata, zero native value, read-only balances, gas, simulations, and a verified mainnet Builder Code all pass. Read balances and token decimals at a pinned block and require 18 decimals for wNVDAx/wAAPLx and 6 for mainnet USD₮0. Stage A reads allowance at the pinned block first. Unless it equals the exact input amount, simulate only the exact attributed approval, validate any non-empty ERC-20 return data (`true` required), and return `APPROVAL_REQUIRED`; below, above, and unlimited allowances are all rejected, and no swap gas estimate or simulation runs. Stage B is reachable only when the pinned allowance equals the exact input; it estimates gas from the exact attributed approval and swap calldata, applies a 20% safety margin, simulates the exact swap, and evaluates OKB readiness. Persist immutable preparation evidence before any future wallet approval can be considered. `READY` is preparation-only and never authorizes a broadcast.
 
+The fixed `$1.00` Mainnet proof uses exactly `0.0048 wNVDAx` (`4800000000000000` base units) and `1.5%` slippage; the adapter rejects values above `1.5%`. The final fresh swap's `minimumReceive` must remain at least the invoice amount (`1.000000 USD₮0`). A proof is `READY` only with the exact pinned allowance, a fresh authenticated preparation, verified direct merchant receiver and Builder Code, successful exact attributed gas estimation and `eth_call`, and sufficient buyer OKB. Wallet confirmation remains manual; no automatic swap broadcast is enabled.
+
 For OKX V6 Classic Swap, the quote and swap references do not share a documented immutable `quoteId`: the official quote response lists route/economic fields, and the swap API accepts the swap intent and returns a fresh `routerResult` plus executable `tx`; neither reference documents `quoteId` as a cross-endpoint correlation guarantee. Treat any returned `quoteId` as diagnostic metadata only. Backend preflight must fetch a fresh `/swap` response through its authenticated server-side API client immediately before accepting/persisting the preparation; caller-supplied swap objects are not execution authority. Keep an unforgeable server-process provenance marker for the freshly produced preparation and persist the authenticated response evidence plus a deterministic hash of that response. Bind it to the invoice/preview intent by chain, buyer, merchant receiver, input/output token addresses, exact input, slippage, invoice acceptance amount, and freshness. The authenticated swap response is authoritative for route, router target, expected output, minimum receive, zero native value, and exact calldata. Decode and validate those fields, requiring the decoded recipient and amounts to match. Every route leg must form one ordered connected path: the first input is the selected asset, each leg output equals the next leg input, and the last output is official USD₮0. Reject disconnected, reordered, duplicate/unrelated, contradictory, or malformed route metadata; accept multi-hop routing only when the response explicitly represents one connected route. Accept a changed route only when the fresh authenticated response is internally valid and all bound economic/participant fields still match; reject token/input changes, recipient changes, unacceptable slippage, nonzero native value, and minimum receive below the invoice amount. Store both preview and authenticated final swap evidence, including the deterministic connected-route fingerprint, preparation timestamp/deadline, authenticated response hash, and exact attributed approval/swap calldata hashes. Receipt reconciliation must continue to compare transaction input byte-for-byte with the persisted attributed swap calldata and use the final preparation's router and minimum receive.
 
-The future mainnet receipt verifier must require exact byte-for-byte match between transaction input and persisted prepared attributed swap calldata; the configured code, persisted prepared code, and decoded receipt code must match exactly, and the registry payout must match. It must verify successful chain-196 receipt, buyer sender, prepared OKX router, canonical receipt and parent blocks, configured confirmation depth, exact balance deltas read at `receiptBlock - 1` and `receiptBlock`, input/output transfers meeting the invoice/minimum policy, quote/invoice binding, and a successful atomic repository claim. Database uniqueness must enforce one settlement per invoice and one use of `(chain_id, transaction_hash)`; a duplicate retry must not create a second paid result. Caller-supplied before-balances are never settlement authority. Frontend success state is never sufficient. Mainnet payment states are modeled separately as `pending`, `prepared`, `ready`, `submitted`, `confirming`, `paid`, `failed`, and `expired`; the existing testnet `pending`/`paid` behavior remains unchanged.
+The mainnet receipt verifier must require byte-for-byte match between transaction input and persisted attributed swap calldata; configured, prepared, and transaction-decoded Builder Code must match exactly, and the registry payout must match. It must verify successful chain-196 receipt, buyer sender, prepared OKX router, canonical receipt and parent blocks, configured confirmation depth, exact balance deltas read at `receiptBlock - 1` and `receiptBlock`, merchant output meeting both the persisted minimum and invoice amount, quote/invoice binding, and an atomic database claim plus invoice-paid transition. Caller-supplied balances are never authority. Frontend success state is never sufficient. Mainnet states remain separate (`pending`, `prepared`, `ready`, `submitted`, `confirming`, `paid`, `failed`, `expired`); testnet behavior is unchanged.
 
-The Phase 2 reconciliation migration is `backend/supabase/migrations/20260922000000_mainnet_phase2_reconciliation.sql`; it must be applied before any future mainnet reconciliation is used. Mainnet remains preparation-only and is not live-ready until all of these controls pass review, a separate mainnet Builder Code is registered and verified, and the migration is applied. No mainnet transaction is authorized by this phase.
+OKX's official [Classic Swap API documentation](https://web3.okx.com/en/onchainos/dev-docs/trade/dex-swap) explicitly warns that a Uni V3 route may consume only part of the payment token and that the router refunds the remainder when pool liquidity is depleted. Therefore `exactIn`, encoded `fromTokenAmount`, or absence of refund metadata does not prove the buyer's net debit equals the requested input. Treat prepared input as a maximum debit. Reconcile the actual positive net debit from transaction-specific input-token `Transfer` logs, allow only a router-to-buyer refund, require the net to match the canonical block-pinned before/after balance delta, and reject malformed, unexplained, non-router, or excessive token movement. Accept payment only when the merchant's verified stablecoin transfer and balance increase meet both `minimumReceive` and the invoice amount. Record actual net debit in the receipt/history; never report the maximum as spent when a refund occurred.
+
+The Phase 2 reconciliation migration is `backend/supabase/migrations/20260922000000_mainnet_phase2_reconciliation.sql`; it must be applied before any future mainnet reconciliation is used. Mainnet swap execution remains disabled until all controls pass review, the mainnet Builder Code is registered/configured and verified, required migrations are applied, and the user explicitly authorizes execution. No migration may be applied to the live database without separate user direction.
+
+Mainnet reconciliation uses a separate `/api/invoices/:invoiceId/mainnet/reconcile` path and does not reuse the chain-1952 route or `TestnetSettlementAdapter`. The request carries only invoice ID, preparation ID, and transaction hash; the server derives all authority from immutable preparation/submission evidence. The pre-prompt recheck additionally receives buyer identity and, only after every gate passes while the preparation is fresh, atomically stores a server/database-timestamped handoff authorization bound to invoice, buyer, chain 196, preparation hash, and exact attributed calldata hash. The timestamp is generated server-side/database-side; client timestamps are never trusted. `/mainnet/submitted` accepts only preparation ID, handoff ID, and transaction hash, and records the submission only after chain-196 RPC returns the exact buyer/router/zero-value transaction and attributed calldata. RPC observation and confirmation may occur after offchain expiry only if a matching handoff authorization was recorded before expiry. No such authorization means no new handoff or reconciliation.
+
+Preparation must still bind the exact-input request amount, route, and calldata, but it must not label that amount as a guaranteed net spend. Partial execution and router refunds are accepted only when their exact input-token net effect is objectively visible and internally consistent as specified above. Unsupported or ambiguous execution mode/route evidence, unexpected refund source, or any mismatch between logs and canonical balance deltas fails closed.
+
+The server-side pre-wallet-handoff readiness recheck loads the same persisted preparation, revalidates its hash and invoice/buyer/chain/Builder Code bindings, checks the pending invoice, fresh balances and exact allowance, and re-estimates/re-simulates the exact persisted attributed calldata. It requires only that the preparation is unexpired at the server/database-timestamped handoff insert; there is no arbitrary minimum-seconds buffer. Before returning READY it records an immutable handoff authorization bound to the preparation and exact calldata. A later exact transaction observation is allowed only when bound to that pre-expiry authorization. An unused/expired preparation cannot create a new handoff. A retry for an already paid invoice is idempotent only after confirming mainnet payment network and the exact same preparation, transaction, and verified evidence; it must not accept a testnet-paid invoice or caller-supplied substituted evidence. The recheck never calls `/swap`, replaces or mutates calldata, or broadcasts. There is still no buyer-signed swap button or swap execution path. Buyer-signed mainnet swaps remain disabled until a new GPT-5.6 Sol High review passes and the user explicitly authorizes implementation.
+
+Submission and handoff storage is added by `backend/supabase/migrations/20260923000000_mainnet_submission_tracking.sql` and `backend/supabase/migrations/20260923000001_mainnet_atomic_handoff_finalization.sql`. The earlier September 22/23 migration versions are applied to the PortPay live project, and the live `service_role` table-privilege correction was applied separately; the full live RLS, function privilege, trigger, unique-index, and evidence-integrity audit passed. The current September 23 migration files passed the final replay against a verified non-live Neon database: all seven migrations applied successfully in order, and the current ACL matrix, RLS, triggers, indexes, A–E backfill cases, atomic finalization, idempotency, rollback behavior, and cleanup passed. The replay did not contact live Supabase. The legacy trigger-only `set_invoices_updated_at()` `PUBLIC EXECUTE` caveat is explicitly accepted for this release. The current September 23 file revisions have not been applied live; buyer-signed Mainnet swap execution remains disabled. The migrations add only chain-196 evidence structures and `invoices.payment_network`; they enforce immutable preparation/handoff/submission evidence, server/database-time freshness binding, uniqueness, and intended service-role-only RPC/table access. The atomic reconciliation function inserts verified settlement evidence and updates the invoice's paid status, payment network, and receipt fields in one PostgreSQL transaction. A retry of the exact same verified evidence is idempotent and returns the already-paid result; conflicts or update failure roll the transaction back. No testnet reconciliation logic or data is changed. The `payment_network` backfill preserves every explicit supported value and every legacy `NULL`; it labels a legacy row `x-layer-mainnet` only when the invoice is already paid and its payment transaction matches an immutable chain-196 settlement joined to that invoice's chain-196 preparation. A preparation alone is never payment evidence, and known testnet records are not rewritten. Repository reads map `NULL` to legacy testnet compatibility and reject unknown non-null network values.
 
 No mainnet wallet funding, swap, Builder Code registration transaction, deployment, private-key execution, backend transaction-send API, or backend broadcast is permitted in this phase. The sole wallet-send exception is the exact buyer-confirmed approval described above; no final mainnet swap path is enabled. The approval UI does not itself authorize a mainnet payment, and any later swap requires separate explicit approval after the required Sol High review.
 
@@ -287,7 +309,12 @@ The exact deployed addresses are configuration, not assumptions. Once known, the
 Expected configuration includes:
 
 ```text
-VITE_CHAIN_ID=1952
+VITE_CHAIN_ID=196
+X_LAYER_MAINNET_RPC_URL=
+X_LAYER_MAINNET_EXPLORER_URL=
+MAINNET_WNVDAx_ADDRESS=0xa8ddb5cd96b5222afe198316e9a57caa642850d5
+MAINNET_WAAPLx_ADDRESS=0x943bf64d566c32a2bcd41ac92fb63c111cc9de8f
+MAINNET_USDT0_ADDRESS=0x779Ded0c9e1022225f8E0630b35a9b54bE713736
 X_LAYER_TESTNET_RPC_URL=
 X_LAYER_TESTNET_EXPLORER_URL=
 TESTNET_USDT0_ADDRESS=0x9e29b3aada05bf2d2c827af80bd28dc0b9b4fb0c
@@ -295,8 +322,8 @@ DEMO_AAPL_ADDRESS=
 DEMO_NVDA_ADDRESS=
 PORTPAY_SETTLEMENT_ADDRESS=
 PORTPAY_BUILDER_CODE=
-PORTPAY_MAINNET_BUILDER_CODE=
-PORTPAY_MAINNET_BUILDER_PAYOUT_ADDRESS=
+PORTPAY_MAINNET_BUILDER_CODE=5fc2j7wx6trof4eu
+PORTPAY_MAINNET_BUILDER_PAYOUT_ADDRESS=0xbabdfef588cf57efcc7c8857960e3ccdd9167589
 MAINNET_QUOTE_TTL_SECONDS=60
 MAINNET_CONFIRMATION_DEPTH=2
 DEMO_PRICE_SOURCE=
@@ -305,7 +332,7 @@ SUPABASE_URL=
 SUPABASE_ANON_KEY=
 ```
 
-The `USD₮0` address above is the address recorded during the planning research and must be checked against current official X Layer documentation before deployment/use. Do not silently substitute a different stablecoin. Mainnet-only OKX API credentials and mainnet addresses must not be required by the testnet path and must never be committed.
+The testnet `USD₮0` address above is retained only for internal regression. Mainnet uses the separate mainnet addresses shown above; never cross-load addresses between networks. Mainnet-only OKX API credentials remain server-side and must never be required by internal testnet tests or committed.
 
 Never commit private keys, seed phrases, API secrets, or populated `.env` files. Use burner/demo wallets and testnet funds only during the required phases.
 
@@ -327,11 +354,11 @@ Do not expand the MVP into:
 
 ## 12. Definition of done
 
-The required MVP is complete only when:
+The historical testnet MVP proof is complete when:
 
 - a merchant can create an invoice and payment link;
 - a separate buyer tab can open checkout and connect a wallet;
-- the buyer can pay with `DemoAAPL` on X Layer Testnet;
+- the buyer paid with `DemoAAPL` on X Layer Testnet;
 - `PortPaySettlement` transfers official testnet `USD₮0` to the merchant;
 - the transaction confirms and is linked to the X Layer explorer;
 - the merchant sees a stablecoin receipt;
@@ -340,11 +367,13 @@ The required MVP is complete only when:
 - eligible transactions carry Builder Code attribution;
 - tests cover settlement math, decimals, replay protection, expiry, permissions, and failure cases;
 - the README documents setup, architecture, features, environment variables, deployed addresses, demo steps, and known limitations;
-- the final two-tab demo is reproducible from a clean checkout.
+- the historical two-tab testnet demo is reproducible from a clean checkout.
+
+The current product network policy is Mainnet-first. Product readiness additionally requires completion of final Sol High review and explicit user authorization before buyer-signed swaps can be enabled. Until then, the mainnet checkout may perform only previously authorized preparation/approval behavior and must clearly disclose that final payment execution is disabled.
 
 ## 13. Mandatory phased build plan
 
-Only one phase may be active at a time. Phase names below are canonical.
+Only one phase may be active at a time. Phase names below record the historical build sequence; their chain-1952 implementation remains an internal regression and legacy compatibility path, not the current product default.
 
 ### Phase 0 — Foundation and repository setup
 
@@ -407,11 +436,11 @@ Current implementation note (2026-09-21): the frontend uses `ox/erc8021` with `v
 
 **Mandatory GPT-5.6 Sol High review checkpoint:** immediately after Builder Codes integration. Review encoding/attachment, transaction construction, wallet behavior, attribution evidence, and whether every eligible PortPay-generated transaction is covered.
 
-### Phase 7 — Product polish and final submission readiness
+### Phase 7 — Product polish and final submission readiness (historical implementation phase)
 
 - Polish landing, dashboard, checkout, receipt, and history UX.
 - Keep the visual language clean and fintech-like.
-- Make Testnet/demo labels and limitations impossible to miss.
+- Keep mainnet execution limitations prominent and preserve clear legacy testnet labels.
 - Update README and both source-of-truth documents for any material changes.
 - Prepare the reproducible two-tab judge demo and submission evidence.
 
@@ -419,13 +448,13 @@ Current implementation note (2026-09-21): the product surfaces now present a thr
 
 **Mandatory GPT-5.6 Sol High review checkpoint:** before final submission and before any mainnet test. Review the complete implementation, contracts, Builder Codes, documentation, security assumptions, demo claims, and known limitations.
 
-### Pre-mainnet merchant integration readiness pass
+### Merchant integration readiness pass (completed historical work)
 
-Before any optional mainnet work, PortPay may complete a focused readiness pass without starting `OKXDEXMainnetAdapter`. This pass may add role-separated merchant and buyer routes, nested product documentation, and a minimal server-to-server merchant integration above the invoice/payment layer. Merchant API authentication, external order references, and signed payment notifications must remain server-side, fail closed, and reuse the existing verified invoice/reconciliation path. No new settlement logic, mainnet configuration, network selector, live transaction, or contract change is part of this pass.
+The completed pass added role-separated merchant and buyer routes, nested product documentation, and a minimal server-to-server merchant integration above the invoice/payment layer. Merchant API authentication, external order references, and signed payment notifications remain server-side and reuse the verified invoice/reconciliation path.
 
 ### Mainnet Phase 1 — isolated adapter preparation
 
-The current mainnet implementation phase is preparation-only. It may add isolated chain-196 configuration, a server-side authenticated OKX V6 DEX API client, read-only quote/approval/swap transaction preparation, direct merchant-recipient validation, and ERC-8021 suffix preparation. It must not fund wallets, approve tokens, deploy contracts, register a mainnet Builder Code, broadcast transactions, or modify the proven testnet settlement path. Mainnet execution remains disabled until the adapter passes review and the user explicitly approves a live proof.
+The current mainnet adapter remains non-broadcasting. It may prepare authenticated chain-196 quotes and transaction data, validate direct merchant-recipient execution, and prepare ERC-8021 suffixes. It must not fund wallets, deploy contracts, register a mainnet Builder Code, sign or broadcast transactions, or modify the proven testnet settlement path. The separately scoped exact manual approval exception in Mainnet Phase 2 remains the only buyer-wallet write; mainnet swap execution stays disabled until review and explicit user authorization.
 
 ### Mainnet Phase 2 — Builder Code registration, preflight, and receipt design
 
@@ -433,12 +462,17 @@ The current mainnet implementation phase is preparation-only. It may add isolate
 - Verify a future mainnet code and payout through `payoutAddress(uint256)` on the official chain-196 registry.
 - Run deterministic read-only preflight, exact calldata simulations, and balance/allowance/gas checks before any future wallet prompt.
 - Define canonical mainnet receipt/reconciliation checks and isolated payment states without changing testnet reconciliation.
-- Keep `PORTPAY_MAINNET_BUILDER_CODE` empty until a real mainnet code is registered and independently verified.
-- Keep mainnet execution, funding, approvals, swaps, deployments, write endpoints, and transactions disabled.
+- Use only the separately registered, independently verified mainnet code/payout configuration; never reuse the testnet Builder Code.
+- Keep mainnet swap execution, funding, deployments, backend signing, transaction-send endpoints, and broadcasts disabled. Only the narrowly scoped exact manual buyer approval described above is allowed; it cannot submit a swap or mark an invoice paid. Readiness/submission/reconciliation endpoints do not sign or broadcast.
+- Treat preparation expiry as a gate on new wallet handoffs only. The recheck persists a DB-timestamped handoff authorization before expiry; later RPC observation of the exact transaction can reconcile after expiry only when bound to that authorization. Do not trust client timestamps. An expired preparation with no valid handoff cannot be newly initiated or reconciled.
+- Use a separate mainnet submission/reconciliation path that accepts only invoice/preparation IDs, a persisted pre-expiry handoff ID, and transaction hash, loads all authority from persisted evidence, and changes invoice status only through the atomic mainnet settlement/invoice RPC after verifier success. Leave testnet reconciliation untouched.
+- Treat the prepared exact-input amount as a maximum buyer debit, not a guaranteed net spend. Accept partial consumption/refund only when router-originated refund and actual positive net debit are fully evidenced by transaction-specific token transfers and equal the canonical pinned balance delta; reject unexplained, non-router, or excessive movement. Merchant USD₮0 must still meet the prepared minimum and invoice floor.
+- Before any future wallet handoff, recheck the same persisted preparation hash, buyer, chain, pending invoice, exact allowance, balances, and exact attributed gas-estimate/`eth_call` results. After every gate passes, insert an immutable database-timestamped handoff authorization only while the preparation is still unexpired; this server/database authorization is the objective boundary immediately before READY is returned and the wallet may be prompted. Do not impose an arbitrary fixed 15-second buffer. The database must reject an expired handoff; a submission observed later is valid only for the exact persisted preparation/calldata bound to that pre-expiry handoff. The recheck never calls `/swap` again or mutates/replaces calldata; no client timestamp is trusted.
+- Keep the buyer-signed mainnet swap path disabled until a new Sol High review passes and the user explicitly authorizes it; these endpoints do not sign, send, or broadcast transactions.
 
 ### Optional Phase 8 — Tiny mainnet proof
 
-Only after the Mainnet Phase 1 preparation, the Phase 7 Sol High review, and separate explicit user approval. Enable `OKXDEXMainnetAdapter` for one deliberately tiny real xStock-to-stablecoin proof if the route, funds, Builder Code registration, and safety conditions are available. This phase is optional and must not delay or weaken the testnet submission.
+Only after all mainnet safety controls and migrations are validated, the final Sol High review passes, and the user separately explicitly authorizes it. Enable `OKXDEXMainnetAdapter` for one deliberately tiny supported-tokenized-asset-to-stablecoin proof if route, funds, Builder Code registration, and all safety conditions are available. Testnet remains regression-only and is not a prerequisite for the product.
 
 ## 14. Change-control rule
 

@@ -37,7 +37,9 @@ export const okxWalletConnector = injected({
 });
 
 export const wagmiConfig = createConfig({
-  chains: [xLayerTestnet, xLayerMainnet],
+  // Mainnet is first so ordinary wallet connection and routing use chain 196.
+  // Testnet remains registered solely for explicit internal development/regression.
+  chains: [xLayerMainnet, xLayerTestnet],
   connectors: [okxWalletConnector],
   transports: {
     [xLayerTestnet.id]: http(xLayerTestnet.rpcUrls.default.http[0]),

@@ -4,11 +4,17 @@ import { resolveBackendUrl } from './api';
 
 describe('invoice link routing', () => {
   it('resolves a payment URL invoice ID and handles a missing ID', () => {
-    expect(readInvoiceRoute('/pay/123')).toEqual({ type: 'pay', invoiceId: '123', paymentNetwork: 'testnet' });
-    expect(readInvoiceRoute('/invoice/123')).toEqual({ type: 'pay', invoiceId: '123', paymentNetwork: 'testnet' });
+    expect(readInvoiceRoute('/pay/123')).toEqual({ type: 'pay', invoiceId: '123', paymentNetwork: 'mainnet' });
+    expect(readInvoiceRoute('/invoice/123')).toEqual({ type: 'pay', invoiceId: '123', paymentNetwork: 'mainnet' });
     expect(readInvoiceRoute('/pay/123', '?network=mainnet')).toEqual({ type: 'pay', invoiceId: '123', paymentNetwork: 'mainnet' });
-    expect(readInvoiceRoute('/pay/123', '?network=unknown')).toEqual({ type: 'pay', invoiceId: '123', paymentNetwork: 'testnet' });
-    expect(readInvoiceRoute('/pay/')).toEqual({ type: 'pay', invoiceId: '', paymentNetwork: 'testnet' });
+    expect(readInvoiceRoute('/pay/123', '?network=unknown')).toEqual({ type: 'pay', invoiceId: '123', paymentNetwork: 'mainnet' });
+    expect(readInvoiceRoute('/pay/')).toEqual({ type: 'pay', invoiceId: '', paymentNetwork: 'mainnet' });
+    expect(readInvoiceRoute('/pay/123', '?network=testnet')).toEqual({ type: 'pay', invoiceId: '123', paymentNetwork: 'mainnet' });
+    expect(readInvoiceRoute('/pay/123', '?network=testnet', { allowInternalTestnet: true }))
+      .toEqual({ type: 'pay', invoiceId: '123', paymentNetwork: 'testnet' });
+    expect(readInvoiceRoute('/docs/testnet')).toMatchObject({ type: 'docs', slug: 'index' });
+    expect(readInvoiceRoute('/docs/testnet', '', { allowInternalTestnet: true }))
+      .toEqual({ type: 'docs', slug: 'testnet' });
     expect(readInvoiceRoute('/merchant/invoices/123')).toEqual({ type: 'merchantInvoice', invoiceId: '123' });
     expect(readInvoiceRoute('/docs/merchant-integration')).toEqual({ type: 'docs', slug: 'merchant-integration' });
     expect(readInvoiceRoute('/merchant')).toEqual({ type: 'dashboard' });

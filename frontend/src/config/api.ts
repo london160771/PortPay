@@ -1,4 +1,5 @@
 export type InvoiceStatus = 'pending' | 'paid';
+export type PaymentNetwork = 'x-layer-testnet' | 'x-layer-mainnet';
 
 export type Invoice = {
   id: string;
@@ -7,6 +8,7 @@ export type Invoice = {
   merchantAddress: string;
   paymentUrl: string;
   status: InvoiceStatus;
+  paymentNetwork?: PaymentNetwork;
   createdAt: string;
   updatedAt: string;
   paymentTxHash?: string;

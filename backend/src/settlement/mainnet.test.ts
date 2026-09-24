@@ -21,6 +21,7 @@ const invoice: Invoice = {
   merchantAddress: merchant,
   paymentUrl: 'https://pay.example.test/pay/00000000-0000-4000-8000-000000000001',
   status: 'pending',
+  paymentNetwork: 'x-layer-mainnet',
   createdAt: '2026-09-21T00:00:00.000Z',
   updatedAt: '2026-09-21T00:00:00.000Z',
 };
@@ -163,6 +164,45 @@ describe('OKXDEXMainnetAdapter preparation boundary', () => {
     expect(quote.merchant.toLowerCase()).toBe(merchant.toLowerCase());
     expect(quote.invoiceStablecoinAmount).toBe('1000000');
     expect(quote.routerPath).toBe(routePath);
+  });
+
+  it('uses the fixed proof 1.5% slippage while keeping the encoded minimum above the invoice floor', async () => {
+    const fake = new FakeOkxClient();
+    const expectedOutput = '1084102';
+    const minimumReceive = '1067840';
+    fake.quote = quoteData({ toTokenAmount: expectedOutput });
+    const unmodifiedSwap = swapData(encodedSwapData(merchant, { minReturnAmount: BigInt(minimumReceive) }));
+    fake.swap = {
+      ...unmodifiedSwap,
+      routerResult: quoteData({ toTokenAmount: expectedOutput }),
+      tx: { ...unmodifiedSwap.tx, minReceiveAmount: minimumReceive, slippagePercent: '1.5' },
+    };
+    const { adapter } = createAdapter(fake);
+    const quote = await adapter.getQuote({
+      assetAmount: inputAmount,
+      assetKey: 'wAapl',
+      buyerAddress: buyer,
+      invoice,
+      slippagePercent: '1.5',
+    });
+
+    expect(quote.minReceiveAmount).toBe(minimumReceive);
+    expect(BigInt(quote.minReceiveAmount)).toBeGreaterThanOrEqual(BigInt(quote.invoiceStablecoinAmount));
+    const prepared = await adapter.prepareSwapTransaction(quote);
+    const decoded = decodeFunctionData({ abi: swapAbi, data: prepared.data });
+    expect(prepared.minReceiveAmount).toBe(minimumReceive);
+    expect(decoded.args[2].minReturnAmount).toBe(BigInt(minimumReceive));
+    expect(prepared.execution?.slippagePercent).toBe('1.5');
+  });
+
+  it('accepts the 1.5% proof ceiling and rejects any higher mainnet slippage', async () => {
+    const { adapter } = createAdapter();
+    await expect(adapter.getQuote({ assetAmount: inputAmount, assetKey: 'wAapl', buyerAddress: buyer, invoice, slippagePercent: '1.5' }))
+      .resolves.toMatchObject({ slippagePercent: '1.5' });
+    for (const slippagePercent of ['1.5001', '1.51', '2']) {
+      await expect(adapter.getQuote({ assetAmount: inputAmount, assetKey: 'wAapl', buyerAddress: buyer, invoice, slippagePercent }))
+        .rejects.toThrow('Slippage must be between 0 and 1.5 percent.');
+    }
   });
 
   it('prepares exact approval calldata and deterministic ERC-8021 suffix data', async () => {
@@ -413,6 +453,31 @@ describe('OKXDEXMainnetAdapter preparation boundary', () => {
       const { adapter } = createAdapter(fake);
       await expect(adapter.prepareSwapTransaction(await createQuote(adapter))).rejects.toThrow(testCase.message);
     }
+  });
+
+  it('treats exact-input as a maximum debit and permits receipt-verified refunds', async () => {
+    const accepted = createAdapter();
+    const acceptedQuote = await createQuote(accepted.adapter);
+    const fullSpend = await accepted.adapter.prepareSwapTransaction(acceptedQuote);
+    expect(fullSpend.execution?.inputConsumptionMode).toBe('exact-in-max-debit-net-observed');
+
+    const partialApi = new FakeOkxClient();
+    partialApi.swap = {
+      ...swapData(),
+      tx: { ...swapData().tx, refundAmount: '1' } as OkxSwapData['tx'],
+    };
+    const partialAdapter = createAdapter(partialApi);
+    const refundPreparation = await partialAdapter.adapter.prepareSwapTransaction(await createQuote(partialAdapter.adapter));
+    expect(refundPreparation.execution?.inputConsumptionMode).toBe('exact-in-max-debit-net-observed');
+
+    const ambiguousApi = new FakeOkxClient();
+    ambiguousApi.swap = {
+      ...swapData(),
+      routerResult: quoteData({ swapMode: undefined }),
+    };
+    const ambiguousAdapter = createAdapter(ambiguousApi);
+    await expect(ambiguousAdapter.adapter.prepareSwapTransaction(await createQuote(ambiguousAdapter.adapter)))
+      .rejects.toThrow(/exact-input mode/);
   });
 
   it('binds final attributed calldata and freshness into reconciliation execution evidence', async () => {

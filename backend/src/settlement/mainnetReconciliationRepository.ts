@@ -16,6 +16,7 @@ export type MainnetPreparationEvidence = {
   inputToken: Address;
   outputToken: Address;
   exactInputAmount: string;
+  inputConsumptionMode: 'exact-in-max-debit-net-observed';
   expectedOutput: string;
   minimumReceive: string;
   routePath: string;
@@ -55,6 +56,27 @@ export type MainnetBalanceEvidence = {
   merchantOutputDelta: string;
 };
 
+/** Server-recorded wallet handoff authorization; the exact transaction may only be observed later. */
+export type MainnetHandoffEvidence = {
+  id: string;
+  preparationId: string;
+  invoiceId: string;
+  buyer: Address;
+  chainId: 196;
+  preparationHash: Hex;
+  calldataHash: Hex;
+  handoffStartedAt: string;
+};
+
+export type MainnetSubmissionEvidence = {
+  preparationId: string;
+  handoffId: string;
+  invoiceId: string;
+  chainId: 196;
+  transactionHash: Hex;
+  submittedAt: string;
+};
+
 export type MainnetSettlementClaim = {
   preparationId: string;
   invoiceId: string;
@@ -67,6 +89,7 @@ export type MainnetSettlementClaim = {
     outputToken: Address;
     inputAmount: string;
     outputAmount: string;
+    maxInputAmount: string;
     router: Address;
     builderPayout: Address;
     blockNumber: string;
@@ -79,8 +102,12 @@ export type MainnetSettlementClaim = {
 export interface MainnetReconciliationRepository {
   savePreparation(evidence: MainnetPreparationEvidence): Promise<void>;
   getPreparation(id: string): Promise<MainnetPreparationEvidence | null>;
-  /** Atomically claims the invoice and (chain, tx hash). True only for the first claim. */
-  claimSettlement(claim: MainnetSettlementClaim): Promise<boolean>;
+  createHandoff(evidence: Omit<MainnetHandoffEvidence, 'id' | 'handoffStartedAt'>): Promise<MainnetHandoffEvidence | null>;
+  getHandoff(id: string): Promise<MainnetHandoffEvidence | null>;
+  recordSubmission(evidence: Omit<MainnetSubmissionEvidence, 'submittedAt'>): Promise<MainnetSubmissionEvidence | null>;
+  getSubmission(preparationId: string, transactionHash: Hex): Promise<MainnetSubmissionEvidence | null>;
+  /** Atomically persists settlement and invoice-paid evidence. Exact retries return already_paid. */
+  claimSettlement(claim: MainnetSettlementClaim): Promise<'claimed' | 'already_paid' | false>;
 }
 
 const approvalAbi = [{
@@ -143,6 +170,7 @@ export async function persistMainnetPreparation(options: {
     id: randomUUID(), invoiceId: quote.invoiceId, quoteId: quote.quoteId ?? `${quote.invoiceId}:${quote.createdAt}`,
     buyer: getAddress(quote.buyer), merchant: getAddress(quote.merchant), chainId: 196,
     inputToken: getAddress(quote.asset), outputToken: getAddress(quote.stablecoin), exactInputAmount: quote.assetAmount,
+    inputConsumptionMode: swap.execution.inputConsumptionMode,
     expectedOutput: swap.execution.expectedOutputAmount, minimumReceive: swap.execution.minimumReceiveAmount,
     routePath: swap.execution.routePath, routeFingerprint: swap.execution.routeFingerprint,
     slippagePercent: swap.execution.slippagePercent, previewQuoteHash: swap.execution.previewQuoteHash,
@@ -214,17 +242,109 @@ export class SupabaseMainnetReconciliationRepository implements MainnetReconcili
     return { ...stored, approval: restoreTransaction(stored.approval), swap: restoreTransaction(stored.swap) };
   }
 
-  async claimSettlement(claim: MainnetSettlementClaim): Promise<boolean> {
-    const { data, error } = await this.client.rpc('claim_mainnet_settlement', {
+  async recordSubmission(evidence: Omit<MainnetSubmissionEvidence, 'submittedAt'>): Promise<MainnetSubmissionEvidence | null> {
+    const { data, error } = await this.client.from('mainnet_submissions').insert({
+      preparation_id: evidence.preparationId,
+      handoff_id: evidence.handoffId,
+      invoice_id: evidence.invoiceId,
+      chain_id: evidence.chainId,
+      transaction_hash: evidence.transactionHash.toLowerCase(),
+    }).select('preparation_id,handoff_id,invoice_id,chain_id,transaction_hash,submitted_at').maybeSingle();
+    if (!error && data) return mapMainnetSubmission(data);
+    if (!error || error.code !== '23505') throw new Error(`Failed to record mainnet submission evidence: ${error?.message ?? 'no row returned'}`);
+
+    // A retry of the same notification is idempotent; uniqueness conflicts with any other
+    // preparation, invoice, or transaction remain rejected.
+    const existing = await this.client.from('mainnet_submissions')
+      .select('preparation_id,handoff_id,invoice_id,chain_id,transaction_hash,submitted_at')
+      .eq('preparation_id', evidence.preparationId)
+      .maybeSingle();
+    if (existing.error) throw new Error(`Failed to read mainnet submission evidence: ${existing.error.message}`);
+    if (!existing.data || existing.data.invoice_id !== evidence.invoiceId || existing.data.handoff_id !== evidence.handoffId
+      || existing.data.chain_id !== 196 || String(existing.data.transaction_hash).toLowerCase() !== evidence.transactionHash.toLowerCase()) return null;
+    return mapMainnetSubmission(existing.data);
+  }
+
+  async createHandoff(evidence: Omit<MainnetHandoffEvidence, 'id' | 'handoffStartedAt'>): Promise<MainnetHandoffEvidence | null> {
+    const { data, error } = await this.client.from('mainnet_handoffs').insert({
+      preparation_id: evidence.preparationId,
+      invoice_id: evidence.invoiceId,
+      buyer_address: evidence.buyer,
+      chain_id: evidence.chainId,
+      preparation_hash: evidence.preparationHash,
+      calldata_hash: evidence.calldataHash,
+    }).select('id,preparation_id,invoice_id,buyer_address,chain_id,preparation_hash,calldata_hash,handoff_started_at').single();
+    if (error || !data) {
+      if (error?.code === '23505') {
+        const existing = await this.client.from('mainnet_handoffs')
+          .select('id,preparation_id,invoice_id,buyer_address,chain_id,preparation_hash,calldata_hash,handoff_started_at')
+          .eq('preparation_id', evidence.preparationId).maybeSingle();
+        if (existing.error) throw new Error(`Failed to read existing mainnet handoff authorization: ${existing.error.message}`);
+        if (!existing.data) return null;
+        const stored = mapMainnetHandoff(existing.data);
+        return stored.invoiceId === evidence.invoiceId && stored.chainId === evidence.chainId
+          && stored.buyer.toLowerCase() === evidence.buyer.toLowerCase()
+          && stored.preparationHash === evidence.preparationHash && stored.calldataHash === evidence.calldataHash
+          ? stored : null;
+      }
+      if (error?.code === '23514') return null;
+      throw new Error(`Failed to persist mainnet wallet handoff authorization: ${error?.message ?? 'no row returned'}`);
+    }
+    return mapMainnetHandoff(data);
+  }
+
+  async getHandoff(id: string): Promise<MainnetHandoffEvidence | null> {
+    const { data, error } = await this.client.from('mainnet_handoffs')
+      .select('id,preparation_id,invoice_id,buyer_address,chain_id,preparation_hash,calldata_hash,handoff_started_at')
+      .eq('id', id).maybeSingle();
+    if (error) throw new Error(`Failed to load mainnet handoff authorization: ${error.message}`);
+    return data ? mapMainnetHandoff(data) : null;
+  }
+
+  async getSubmission(preparationId: string, transactionHash: Hex): Promise<MainnetSubmissionEvidence | null> {
+    const { data, error } = await this.client.from('mainnet_submissions')
+      .select('preparation_id,handoff_id,invoice_id,chain_id,transaction_hash,submitted_at')
+      .eq('preparation_id', preparationId)
+      .eq('transaction_hash', transactionHash.toLowerCase())
+      .maybeSingle();
+    if (error) throw new Error(`Failed to load mainnet submission evidence: ${error.message}`);
+    if (!data) return null;
+    return mapMainnetSubmission(data);
+  }
+
+  async claimSettlement(claim: MainnetSettlementClaim): Promise<'claimed' | 'already_paid' | false> {
+    const { data, error } = await this.client.rpc('finalize_mainnet_settlement', {
       p_preparation_id: claim.preparationId,
       p_invoice_id: claim.invoiceId,
       p_chain_id: claim.chainId,
       p_transaction_hash: claim.transactionHash,
       p_evidence: claim.evidence,
     });
-    if (error) throw new Error(`Atomic mainnet settlement claim failed: ${error.message}`);
-    return data === true || (typeof data === 'object' && data !== null && 'claimed' in data && data.claimed === true);
+    if (error) throw new Error(`Atomic mainnet settlement/invoice update failed: ${error.message}`);
+    if (data === 'claimed' || data === 'already_paid') return data;
+    return false;
   }
+}
+
+function mapMainnetHandoff(data: Record<string, unknown>): MainnetHandoffEvidence {
+  if (data.chain_id !== 196 || typeof data.handoff_started_at !== 'string') throw new Error('Stored mainnet handoff evidence is malformed.');
+  return {
+    id: String(data.id), preparationId: String(data.preparation_id), invoiceId: String(data.invoice_id),
+    buyer: String(data.buyer_address) as Address, chainId: 196,
+    preparationHash: String(data.preparation_hash) as Hex, calldataHash: String(data.calldata_hash) as Hex,
+    handoffStartedAt: data.handoff_started_at,
+  };
+}
+
+function mapMainnetSubmission(data: Record<string, unknown>): MainnetSubmissionEvidence {
+  if (data.chain_id !== 196 || typeof data.submitted_at !== 'string' || typeof data.handoff_id !== 'string') {
+    throw new Error('Stored mainnet submission evidence is malformed.');
+  }
+  return {
+    preparationId: String(data.preparation_id), handoffId: data.handoff_id,
+    invoiceId: String(data.invoice_id), chainId: 196,
+    transactionHash: String(data.transaction_hash) as Hex, submittedAt: data.submitted_at,
+  };
 }
 
 export function createMainnetReconciliationRepository(): MainnetReconciliationRepository {
@@ -238,10 +358,16 @@ export function createMainnetReconciliationRepository(): MainnetReconciliationRe
 /** Test utility with serialized claims, matching the database uniqueness contract. */
 export class InMemoryMainnetReconciliationRepository implements MainnetReconciliationRepository {
   private readonly preparations = new Map<string, MainnetPreparationEvidence>();
+  private readonly submissions = new Map<string, MainnetSubmissionEvidence>();
+  private readonly handoffs = new Map<string, MainnetHandoffEvidence>();
+  private readonly submittedTransactions = new Set<string>();
+  private readonly submittedInvoices = new Set<string>();
   private readonly settlements = new Map<string, MainnetSettlementClaim>();
   private readonly invoices = new Set<string>();
   private readonly transactions = new Set<string>();
   private claimQueue: Promise<void> = Promise.resolve();
+
+  constructor(private readonly now: () => Date = () => new Date()) {}
 
   async savePreparation(evidence: MainnetPreparationEvidence): Promise<void> {
     if (this.preparations.has(evidence.id)) throw new Error('Preparation evidence is immutable and cannot be replaced.');
@@ -253,7 +379,62 @@ export class InMemoryMainnetReconciliationRepository implements MainnetReconcili
     return value ? structuredClone(value) : null;
   }
 
-  async claimSettlement(claim: MainnetSettlementClaim): Promise<boolean> {
+  async createHandoff(evidence: Omit<MainnetHandoffEvidence, 'id' | 'handoffStartedAt'>): Promise<MainnetHandoffEvidence | null> {
+    const previous = [...this.handoffs.values()].find((handoff) => handoff.preparationId === evidence.preparationId);
+    if (previous) {
+      return previous.invoiceId === evidence.invoiceId && previous.chainId === evidence.chainId
+        && previous.buyer.toLowerCase() === evidence.buyer.toLowerCase()
+        && previous.preparationHash === evidence.preparationHash && previous.calldataHash === evidence.calldataHash
+        ? structuredClone(previous) : null;
+    }
+    const preparation = this.preparations.get(evidence.preparationId);
+    const startedAt = this.now().toISOString();
+    const startedMs = Date.parse(startedAt);
+    if (!preparation || preparation.invoiceId !== evidence.invoiceId || preparation.chainId !== 196
+      || evidence.chainId !== 196 || preparation.buyer.toLowerCase() !== evidence.buyer.toLowerCase()
+      || preparation.preparationHash !== evidence.preparationHash
+      || preparation.attributedSwapCalldataHash !== evidence.calldataHash
+      || !Number.isFinite(startedMs) || startedMs < Date.parse(preparation.preparedAt)
+      || startedMs >= Date.parse(preparation.expiresAt)) return null;
+    const handoff: MainnetHandoffEvidence = { ...structuredClone(evidence), id: randomUUID(), handoffStartedAt: startedAt };
+    this.handoffs.set(handoff.id, handoff);
+    return structuredClone(handoff);
+  }
+
+  async getHandoff(id: string): Promise<MainnetHandoffEvidence | null> {
+    const value = this.handoffs.get(id);
+    return value ? structuredClone(value) : null;
+  }
+
+  async recordSubmission(evidence: Omit<MainnetSubmissionEvidence, 'submittedAt'>): Promise<MainnetSubmissionEvidence | null> {
+    const existing = this.submissions.get(evidence.preparationId);
+    if (existing) return existing.invoiceId === evidence.invoiceId
+      && existing.handoffId === evidence.handoffId
+      && existing.transactionHash.toLowerCase() === evidence.transactionHash.toLowerCase() ? structuredClone(existing) : null;
+    const txKey = `${evidence.chainId}:${evidence.transactionHash.toLowerCase()}`;
+    const preparation = this.preparations.get(evidence.preparationId);
+    const submittedAtIso = this.now().toISOString();
+    const submittedAt = Date.parse(submittedAtIso);
+    const handoff = this.handoffs.get(evidence.handoffId);
+    if (evidence.chainId !== 196 || !preparation || preparation.invoiceId !== evidence.invoiceId
+      || !handoff || handoff.preparationId !== evidence.preparationId || handoff.invoiceId !== evidence.invoiceId
+      || handoff.chainId !== 196 || handoff.buyer.toLowerCase() !== preparation.buyer.toLowerCase()
+      || handoff.preparationHash !== preparation.preparationHash || handoff.calldataHash !== preparation.attributedSwapCalldataHash
+      || !Number.isFinite(submittedAt) || submittedAt < Date.parse(handoff.handoffStartedAt)
+      || this.submittedInvoices.has(evidence.invoiceId) || this.submittedTransactions.has(txKey)) return null;
+    const submission: MainnetSubmissionEvidence = { ...structuredClone(evidence), submittedAt: submittedAtIso };
+    this.submissions.set(evidence.preparationId, submission);
+    this.submittedInvoices.add(evidence.invoiceId);
+    this.submittedTransactions.add(txKey);
+    return structuredClone(submission);
+  }
+
+  async getSubmission(preparationId: string, transactionHash: Hex): Promise<MainnetSubmissionEvidence | null> {
+    const value = this.submissions.get(preparationId);
+    return value && value.transactionHash.toLowerCase() === transactionHash.toLowerCase() ? structuredClone(value) : null;
+  }
+
+  async claimSettlement(claim: MainnetSettlementClaim): Promise<'claimed' | 'already_paid' | false> {
     let release!: () => void;
     const previous = this.claimQueue;
     this.claimQueue = new Promise<void>((resolve) => { release = resolve; });
@@ -262,12 +443,16 @@ export class InMemoryMainnetReconciliationRepository implements MainnetReconcili
       const txKey = `${claim.chainId}:${claim.transactionHash.toLowerCase()}`;
       const preparation = this.preparations.get(claim.preparationId);
       if (!/^0x[0-9a-fA-F]{64}$/.test(claim.transactionHash) || claim.chainId !== 196
-        || this.invoices.has(claim.invoiceId) || this.transactions.has(txKey)
         || !preparation || preparation.invoiceId !== claim.invoiceId || preparation.chainId !== claim.chainId) return false;
+      const prior = this.settlements.get(claim.invoiceId);
+      if (prior) return prior.preparationId === claim.preparationId
+        && prior.transactionHash.toLowerCase() === claim.transactionHash.toLowerCase()
+        && JSON.stringify(prior.evidence) === JSON.stringify(claim.evidence) ? 'already_paid' : false;
+      if (this.invoices.has(claim.invoiceId) || this.transactions.has(txKey)) return false;
       this.invoices.add(claim.invoiceId);
       this.transactions.add(txKey);
       this.settlements.set(claim.invoiceId, structuredClone(claim));
-      return true;
+      return 'claimed';
     } finally {
       release();
     }

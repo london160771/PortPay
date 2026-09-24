@@ -25,7 +25,7 @@ const approveAbi = [{ type: 'function', name: 'approve', stateMutability: 'nonpa
 const transferAbi = [{ type: 'event', name: 'Transfer', anonymous: false, inputs: [{ indexed: true, name: 'from', type: 'address' }, { indexed: true, name: 'to', type: 'address' }, { indexed: false, name: 'value', type: 'uint256' }] }] as const;
 const invoice: Invoice = {
   id: '00000000-0000-4000-8000-000000000001', title: 'Receipt invoice', amountUsdt0: '1', merchantAddress: merchant,
-  paymentUrl: 'https://pay.example.test/pay/00000000-0000-4000-8000-000000000001', status: 'pending',
+  paymentUrl: 'https://pay.example.test/pay/00000000-0000-4000-8000-000000000001', status: 'pending', paymentNetwork: 'x-layer-mainnet',
   createdAt: '2026-09-21T00:00:00.000Z', updatedAt: '2026-09-21T00:00:00.000Z',
 };
 function token(address: string, symbol: string): OkxQuoteData['fromToken'] {
@@ -55,7 +55,7 @@ function transferLog(tokenAddress: Address, from: Address, to: Address, value: b
 type ClientOptions = {
   transactionInput?: Hex; transactionTo?: Address | null; receiptTo?: Address | null; canonicalHash?: Hex;
   buyerBefore?: unknown; buyerAfter?: unknown; merchantBefore?: unknown; merchantAfter?: unknown;
-  wrongParent?: boolean; wrongBlockNumber?: boolean;
+  wrongParent?: boolean; wrongBlockNumber?: boolean; receiptTimestamp?: bigint; reverted?: boolean;
 };
 function receiptClient(logs: readonly MainnetReceiptLog[], options: ClientOptions = {}): MainnetReceiptClient {
   const exactInput = options.transactionInput ?? expectedSwapInput;
@@ -68,23 +68,30 @@ function receiptClient(logs: readonly MainnetReceiptLog[], options: ClientOption
       if (isBuyer) return before ? options.buyerBefore ?? BigInt(inputAmount) + 1n : options.buyerAfter ?? 1n;
       return before ? options.merchantBefore ?? 0n : options.merchantAfter ?? 1_000_000n;
     },
-    async getTransactionReceipt() { return { status: 'success', to: options.receiptTo === undefined ? router : options.receiptTo, from: buyer, blockNumber: 100n, blockHash, logs }; },
+    async getTransactionReceipt() { return { status: options.reverted ? 'reverted' : 'success', to: options.receiptTo === undefined ? router : options.receiptTo, from: buyer, blockNumber: 100n, blockHash, logs }; },
     async getTransaction() { return { from: buyer, to: options.transactionTo === undefined ? router : options.transactionTo, input: exactInput, value: 0n }; },
     async getBlockNumber() { return 105n; },
     async getBlock({ blockNumber }) {
       const number = options.wrongBlockNumber ? blockNumber + 1n : blockNumber;
       if (blockNumber === 90n) return { number, hash: preparationBlockHash, parentHash: previousBlockHash, timestamp: 1_790_000_000n };
       if (blockNumber === 99n) return { number, hash: previousBlockHash, parentHash: `0x${'e'.repeat(64)}` as Hex, timestamp: BigInt(Date.parse('2026-09-21T00:00:29Z') / 1000) };
-      return { number, hash: options.canonicalHash ?? blockHash, parentHash: options.wrongParent ? `0x${'f'.repeat(64)}` as Hex : previousBlockHash, timestamp: BigInt(Date.parse('2026-09-21T00:00:30Z') / 1000) };
+      return { number, hash: options.canonicalHash ?? blockHash, parentHash: options.wrongParent ? `0x${'f'.repeat(64)}` as Hex : previousBlockHash, timestamp: options.receiptTimestamp ?? BigInt(Date.parse('2026-09-21T00:00:30Z') / 1000) };
     },
   };
 }
 let expectedSwapInput: Hex = '0x';
-async function fixture() {
+async function fixture(options: { recordSubmission?: boolean; submittedAt?: string } = {}) {
   const setup = await prepared();
   expectedSwapInput = setup.swap.attributedData!;
-  const repository = new InMemoryMainnetReconciliationRepository();
+  let repositoryTime = new Date('2026-09-21T00:00:10.000Z');
+  const repository = new InMemoryMainnetReconciliationRepository(() => repositoryTime);
   const evidence = await persistMainnetPreparation({ repository, quote: setup.quote, approval: setup.approval, swap: setup.swap, builderPayout: buyer, snapshotBlockNumber: 90n, snapshotBlockHash: preparationBlockHash });
+  if (options.recordSubmission !== false) {
+    const handoff = await repository.createHandoff({ preparationId: evidence.id, invoiceId: invoice.id, buyer, chainId: 196, preparationHash: evidence.preparationHash, calldataHash: evidence.attributedSwapCalldataHash });
+    if (!handoff) throw new Error('test fixture handoff failed');
+    if (options.submittedAt) repositoryTime = new Date(options.submittedAt);
+    await repository.recordSubmission({ preparationId: evidence.id, handoffId: handoff.id, invoiceId: invoice.id, chainId: 196, transactionHash: txHash });
+  }
   const logs = [transferLog(asset, buyer, router, BigInt(inputAmount)), transferLog(stablecoin, router, merchant, 1_000_000n)];
   const common = {
     repository, preparationId: evidence.id, invoice, txHash, configuredMainnetBuilderCode: builderCode,
@@ -116,7 +123,69 @@ describe('mainnet receipt/reconciliation verification', () => {
     expect(value.evidence.preparationHash).toBe(value.setup.swap.execution?.preparationHash);
     expect(result.balanceEvidence).toMatchObject({ beforeBlockNumber: '99', receiptBlockNumber: '100', buyerInputDelta: inputAmount, merchantOutputDelta: '1000000' });
     expect(requestedBlocks).toEqual([99n, 100n, 99n, 100n]);
-    await expect(verifyMainnetReceipt({ ...value.common, publicClient: receiptClient(value.logs) })).rejects.toMatchObject({ code: 'DUPLICATE_SETTLEMENT' });
+    await expect(verifyMainnetReceipt({
+      ...value.common,
+      invoice: { ...invoice, status: 'paid', paymentNetwork: 'x-layer-mainnet', paymentTxHash: txHash },
+      publicClient: receiptClient(value.logs),
+    })).resolves.toMatchObject({ status: 'paid', claimDisposition: 'already_paid' });
+  });
+
+  it('rejects paid retries unless network, transaction, preparation, and verified evidence all match', async () => {
+    const value = await fixture();
+    const paidInvoice = { ...invoice, status: 'paid' as const, paymentNetwork: 'x-layer-mainnet' as const, paymentTxHash: txHash };
+    await expect(verifyMainnetReceipt({ ...value.common, invoice: paidInvoice, preparationId: '00000000-0000-4000-8000-000000000099', publicClient: receiptClient(value.logs) }))
+      .rejects.toMatchObject({ code: 'INVALID_PREPARATION' });
+    await expect(verifyMainnetReceipt({ ...value.common, invoice: { ...paidInvoice, paymentTxHash: `0x${'9'.repeat(64)}` }, publicClient: receiptClient(value.logs) }))
+      .rejects.toMatchObject({ code: 'DUPLICATE_SETTLEMENT' });
+    await expect(verifyMainnetReceipt({ ...value.common, invoice: { ...paidInvoice, paymentNetwork: 'x-layer-testnet' }, publicClient: receiptClient(value.logs) }))
+      .rejects.toMatchObject({ code: 'DUPLICATE_SETTLEMENT' });
+  });
+
+  it('accepts an exact transaction submitted before expiry and canonically included after expiry', async () => {
+    const value = await fixture({ submittedAt: '2026-09-21T00:01:01.000Z' });
+    const afterExpiry = BigInt(Date.parse(value.evidence.expiresAt) / 1000 + 1);
+    const result = await verifyMainnetReceipt({ ...value.common, publicClient: receiptClient(value.logs, { receiptTimestamp: afterExpiry }) });
+    expect(result.status).toBe('paid');
+    expect(value.repository.settlementCount()).toBe(1);
+  });
+
+  it('accepts partial input consumption/refund when net debit is proven and merchant floor is met', async () => {
+    const value = await fixture();
+    const outflow = 2_000_000_000_000_000n;
+    const refund = 500_000_000_000_000n;
+    const netDebit = outflow - refund;
+    const logs = [transferLog(asset, buyer, router, outflow), transferLog(asset, router, buyer, refund), transferLog(stablecoin, router, merchant, 1_000_000n)];
+    const client = receiptClient(logs, { buyerBefore: BigInt(inputAmount) + 10n, buyerAfter: BigInt(inputAmount) + 10n - netDebit });
+    const result = await verifyMainnetReceipt({ ...value.common, publicClient: client });
+    expect(result.spentAmount).toBe(netDebit.toString());
+    expect(result.balanceEvidence.buyerInputDelta).toBe(netDebit.toString());
+    expect(result.stablecoinReceived).toBe('1000000');
+  });
+
+  it('rejects unexplained refunds and still enforces the merchant invoice floor', async () => {
+    const value = await fixture();
+    const outflow = 2_000_000_000_000_000n;
+    const refund = 500_000_000_000_000n;
+    const refundLogs = [transferLog(asset, buyer, router, outflow), transferLog(asset, router, buyer, refund), transferLog(stablecoin, router, merchant, 1_000_000n)];
+    await expect(verifyMainnetReceipt({ ...value.common, publicClient: receiptClient(refundLogs) })).rejects.toMatchObject({ code: 'INVALID_INPUT_AMOUNT' });
+    const unexpectedRefund = [transferLog(asset, buyer, router, outflow), transferLog(asset, merchant, buyer, refund), transferLog(stablecoin, router, merchant, 1_000_000n)];
+    await expect(verifyMainnetReceipt({ ...value.common, publicClient: receiptClient(unexpectedRefund) })).rejects.toMatchObject({ code: 'INVALID_INPUT_AMOUNT' });
+    const belowFloorLogs = [transferLog(asset, buyer, router, BigInt(inputAmount)), transferLog(stablecoin, router, merchant, 999_999n)];
+    await expect(verifyMainnetReceipt({ ...value.common, publicClient: receiptClient(belowFloorLogs) })).rejects.toMatchObject({ code: 'INSUFFICIENT_OUTPUT' });
+  });
+
+  it('rejects an expired preparation that has no server-recorded submission', async () => {
+    const value = await fixture({ recordSubmission: false });
+    await expect(verifyMainnetReceipt({ ...value.common, publicClient: receiptClient(value.logs) }))
+      .rejects.toMatchObject({ code: 'INVALID_SUBMISSION' });
+    expect(value.repository.settlementCount()).toBe(0);
+  });
+
+  it('never claims or pays a reverted mainnet transaction', async () => {
+    const value = await fixture();
+    await expect(verifyMainnetReceipt({ ...value.common, publicClient: receiptClient(value.logs, { reverted: true }) }))
+      .rejects.toMatchObject({ code: 'FAILED_TRANSACTION' });
+    expect(value.repository.settlementCount()).toBe(0);
   });
 
   it('rejects byte-modified swap calldata, a different valid code, and the testnet Builder Code', async () => {
@@ -129,6 +198,9 @@ describe('mainnet receipt/reconciliation verification', () => {
     const corruptedRepository = {
       getPreparation: async () => ({ ...value.evidence, swap: { ...value.evidence.swap, builderCode: 'othercode1234567' } }),
       savePreparation: value.repository.savePreparation.bind(value.repository),
+      createHandoff: value.repository.createHandoff.bind(value.repository), getHandoff: value.repository.getHandoff.bind(value.repository),
+      recordSubmission: value.repository.recordSubmission.bind(value.repository),
+      getSubmission: value.repository.getSubmission.bind(value.repository),
       claimSettlement: value.repository.claimSettlement.bind(value.repository),
     };
     await expect(verifyMainnetReceipt({ ...value.common, repository: corruptedRepository, publicClient: receiptClient(value.logs) })).rejects.toMatchObject({ code: 'INVALID_PREPARATION' });
@@ -153,6 +225,9 @@ describe('mainnet receipt/reconciliation verification', () => {
     const tamperedRepository = {
       getPreparation: async () => tamperedResponse,
       savePreparation: value.repository.savePreparation.bind(value.repository),
+      createHandoff: value.repository.createHandoff.bind(value.repository), getHandoff: value.repository.getHandoff.bind(value.repository),
+      recordSubmission: value.repository.recordSubmission.bind(value.repository),
+      getSubmission: value.repository.getSubmission.bind(value.repository),
       claimSettlement: value.repository.claimSettlement.bind(value.repository),
     };
     await expect(verifyMainnetReceipt({ ...value.common, repository: tamperedRepository, publicClient: receiptClient(value.logs) })).rejects.toMatchObject({ code: 'INVALID_PREPARATION' });
@@ -164,6 +239,9 @@ describe('mainnet receipt/reconciliation verification', () => {
     const approvalRepository = {
       getPreparation: async () => tamperedApprovalBinding,
       savePreparation: value.repository.savePreparation.bind(value.repository),
+      createHandoff: value.repository.createHandoff.bind(value.repository), getHandoff: value.repository.getHandoff.bind(value.repository),
+      recordSubmission: value.repository.recordSubmission.bind(value.repository),
+      getSubmission: value.repository.getSubmission.bind(value.repository),
       claimSettlement: value.repository.claimSettlement.bind(value.repository),
     };
     await expect(verifyMainnetReceipt({ ...value.common, repository: approvalRepository, publicClient: receiptClient(value.logs) })).rejects.toMatchObject({ code: 'INVALID_PREPARATION' });

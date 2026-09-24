@@ -7,7 +7,7 @@ import {
   runtimeConfig,
 } from './config/runtime.js';
 import type { MerchantAuthConfig, MerchantCredential } from './config/runtime.js';
-import { xLayerTestnet } from './config/xlayer.js';
+import { xLayerMainnet } from './config/xlayerMainnet.js';
 import { createInvoice } from './invoices/service.js';
 import { reconcileInvoicePayment } from './invoices/settlement.js';
 import {
@@ -34,11 +34,16 @@ import type { SettlementAdapter } from './settlement/types.js';
 import { deliverPaymentConfirmedWebhook } from './integration/webhook.js';
 import { createMainnetApprovalPreparationService } from './settlement/mainnetApprovalPreparation.js';
 import type { MainnetApprovalPreparationService } from './settlement/mainnetApprovalPreparation.js';
+import { createMainnetPaymentService } from './settlement/mainnetPayment.js';
+import type { MainnetPaymentService } from './settlement/mainnetPayment.js';
+import { MainnetReceiptVerificationError } from './settlement/mainnetReceipt.js';
 
 type AppOptions = {
   merchantAuth?: MerchantAuthConfig;
   mainnetApprovalPreparation?: MainnetApprovalPreparationService;
+  mainnetPayment?: MainnetPaymentService;
   webhookDelivery?: (invoice: Invoice, credential: MerchantCredential) => Promise<void>;
+  enableInternalTestnet?: boolean;
 };
 
 type AuthenticatedRequest = express.Request & { merchantCredential?: MerchantCredential };
@@ -71,11 +76,18 @@ function publicInvoice(invoice: Invoice): Omit<Invoice, 'externalOrderReference'
 
 export function createApp(
   invoiceRepository: InvoiceRepository = createInvoiceRepository(),
-  settlementAdapter: SettlementAdapter = createTestnetSettlementAdapter(),
+  settlementAdapter?: SettlementAdapter,
   options: AppOptions = {},
 ) {
   const app = express();
   const merchantAuth = options.merchantAuth ?? runtimeConfig.merchantAuth;
+  const mainnetPayment = options.mainnetPayment;
+  const isTestRuntime = process.env.NODE_ENV === 'test';
+  const internalTestnetEnabled = process.env.NODE_ENV !== 'production'
+    && (isTestRuntime || options.enableInternalTestnet === true || process.env.PORTPAY_ENABLE_INTERNAL_TESTNET === 'true');
+  const internalTestnetAdapter = internalTestnetEnabled
+    ? (settlementAdapter ?? createTestnetSettlementAdapter())
+    : undefined;
 
   app.use(
     cors({
@@ -90,8 +102,8 @@ export function createApp(
       status: 'ok',
       phase: 'Phase 7 — Polish/submission',
       network: {
-        name: xLayerTestnet.name,
-        chainId: xLayerTestnet.chainId,
+        name: xLayerMainnet.name,
+        chainId: xLayerMainnet.chainId,
       },
       database: {
         provider: databaseConfig.provider,
@@ -107,7 +119,7 @@ export function createApp(
         title: body.title,
         amountUsdt0: body.amountUsdt0,
         merchantAddress: body.merchantAddress,
-      });
+      }, internalTestnetEnabled && body.paymentNetwork === 'x-layer-testnet' ? 'x-layer-testnet' : 'x-layer-mainnet');
       response.status(201).json({ invoice: publicInvoice(invoice) });
     } catch (error) {
       next(error);
@@ -159,7 +171,7 @@ export function createApp(
     }
   });
 
-  app.post('/api/invoices/:invoiceId/quote', async (request, response, next) => {
+  if (internalTestnetAdapter) app.post('/api/invoices/:invoiceId/quote', async (request, response, next) => {
     try {
       const invoiceId = validateInvoiceId(request.params.invoiceId);
       const invoice = await invoiceRepository.findById(invoiceId);
@@ -168,7 +180,11 @@ export function createApp(
         return;
       }
 
-      const quote = await settlementAdapter.createQuote(
+      if (invoice.paymentNetwork !== 'x-layer-testnet') {
+        response.status(409).json({ error: 'This invoice is not an internal testnet invoice.' });
+        return;
+      }
+      const quote = await internalTestnetAdapter.createQuote(
         invoice,
         request.body?.buyerAddress,
         request.body?.assetKey,
@@ -195,6 +211,10 @@ export function createApp(
       response.status(404).json({ error: 'Invoice not found.' });
       return;
     }
+    if (invoice.paymentNetwork !== 'x-layer-mainnet') {
+      response.status(409).json({ error: 'Mainnet approval preparation requires a mainnet-bound invoice.' });
+      return;
+    }
     if (invoice.status !== 'pending') {
       response.status(409).json({ error: 'Only a pending invoice can be used to prepare a mainnet approval.' });
       return;
@@ -210,7 +230,88 @@ export function createApp(
     }
   });
 
-  app.post('/api/invoices/:invoiceId/reconcile', async (request, response, next) => {
+  // Mainnet-only, client-signature follow-up infrastructure. These endpoints accept only
+  // immutable preparation identity and a transaction hash; all execution fields come from Supabase.
+  app.post('/api/invoices/:invoiceId/mainnet/readiness-recheck', async (request, response, next) => {
+    try {
+      const invoiceId = validateInvoiceId(request.params.invoiceId);
+      const preparationId = validateInvoiceId(request.body?.preparationId);
+      const buyerAddress = validateWalletAddress(request.body?.buyerAddress, 'Buyer wallet') as `0x${string}`;
+      const invoice = await invoiceRepository.findById(invoiceId);
+      if (!invoice) { response.status(404).json({ error: 'Invoice not found.' }); return; }
+      if (invoice.paymentNetwork !== 'x-layer-mainnet') { response.status(409).json({ error: 'Mainnet readiness requires a mainnet-bound invoice.' }); return; }
+      if (invoice.status !== 'pending') { response.status(409).json({ error: 'Only a pending invoice can be rechecked.' }); return; }
+      if (!mainnetPayment) { response.status(503).json({ error: 'Mainnet preparation recheck is not configured.' }); return; }
+      response.json(await mainnetPayment.recheck(invoice, preparationId, buyerAddress));
+    } catch (error) { next(error); }
+  });
+
+  app.post('/api/invoices/:invoiceId/mainnet/submitted', async (request, response, next) => {
+    try {
+      const invoiceId = validateInvoiceId(request.params.invoiceId);
+      const preparationId = validateInvoiceId(request.body?.preparationId);
+      const handoffId = validateInvoiceId(request.body?.handoffId);
+      const transactionHash = validateTransactionHash(request.body?.txHash) as `0x${string}`;
+      const invoice = await invoiceRepository.findById(invoiceId);
+      if (!invoice) { response.status(404).json({ error: 'Invoice not found.' }); return; }
+      if (invoice.paymentNetwork !== 'x-layer-mainnet') { response.status(409).json({ error: 'Mainnet submission requires a mainnet-bound invoice.' }); return; }
+      if (invoice.status !== 'pending') { response.status(409).json({ error: 'Only a pending invoice can accept a mainnet submission.' }); return; }
+      if (!mainnetPayment) { response.status(503).json({ error: 'Mainnet submission verification is not configured.' }); return; }
+      try {
+        response.status(202).json(await mainnetPayment.recordSubmission(invoice, preparationId, handoffId, transactionHash));
+      } catch {
+        response.status(409).json({ error: 'The transaction was not recorded; verify it matches a fresh persisted mainnet preparation.' });
+      }
+    } catch (error) { next(error); }
+  });
+
+  app.post('/api/invoices/:invoiceId/mainnet/reconcile', async (request, response, next) => {
+    try {
+      const invoiceId = validateInvoiceId(request.params.invoiceId);
+      const preparationId = validateInvoiceId(request.body?.preparationId);
+      const transactionHash = validateTransactionHash(request.body?.txHash) as `0x${string}`;
+      const invoice = await invoiceRepository.findById(invoiceId);
+      if (!invoice) { response.status(404).json({ error: 'Invoice not found.' }); return; }
+      const exactMainnetPaidRetry = invoice.status === 'paid'
+        && invoice.paymentNetwork === 'x-layer-mainnet'
+        && invoice.paymentTxHash?.toLowerCase() === transactionHash.toLowerCase();
+      if (invoice.status === 'paid' && !exactMainnetPaidRetry) {
+        response.status(409).json({ error: 'Invoice is already paid on another network or by a different transaction.' });
+        return;
+      }
+      if (invoice.status !== 'pending' && !exactMainnetPaidRetry) {
+        response.status(409).json({ error: 'Only a pending invoice or an exact verified mainnet retry can be reconciled.' });
+        return;
+      }
+      if (!mainnetPayment) { response.status(503).json({ error: 'Mainnet reconciliation is not configured.' }); return; }
+      const { verification } = await mainnetPayment.reconcile(invoice, preparationId, transactionHash);
+      // finalize_mainnet_settlement commits settlement evidence and invoice status together.
+      const updatedInvoice = await invoiceRepository.findById(invoice.id);
+      if (!updatedInvoice || updatedInvoice.status !== 'paid'
+        || updatedInvoice.paymentNetwork !== 'x-layer-mainnet'
+        || updatedInvoice.paymentTxHash?.toLowerCase() !== transactionHash.toLowerCase()) {
+        response.status(409).json({ error: 'Verified settlement could not transition the pending invoice.' });
+        return;
+      }
+      if (verification.claimDisposition === 'claimed') {
+        const credential = findMerchantCredentialByAddress(updatedInvoice.merchantAddress, merchantAuth);
+        if (credential?.webhookUrl && credential.webhookSecret) {
+          const deliver = options.webhookDelivery ?? ((paidInvoice, paidCredential) => deliverPaymentConfirmedWebhook(paidCredential, paidInvoice));
+          void deliver(updatedInvoice, credential).catch((error: unknown) => console.error('PortPay payment webhook delivery failed', error));
+        }
+      }
+      response.json({ invoice: publicInvoice(updatedInvoice) });
+    } catch (error) {
+      if (error instanceof MainnetReceiptVerificationError) {
+        const status = error.code === 'CONFIRMING' ? 202 : error.code === 'DUPLICATE_SETTLEMENT' || error.code === 'INVALID_SUBMISSION' ? 409 : 422;
+        response.status(status).json({ error: error.message, code: error.code });
+        return;
+      }
+      next(error);
+    }
+  });
+
+  if (internalTestnetAdapter) app.post('/api/invoices/:invoiceId/reconcile', async (request, response, next) => {
     try {
       const invoiceId = validateInvoiceId(request.params.invoiceId);
       const invoice = await invoiceRepository.findById(invoiceId);
@@ -218,10 +319,14 @@ export function createApp(
         response.status(404).json({ error: 'Invoice not found.' });
         return;
       }
+      if (invoice.paymentNetwork !== 'x-layer-testnet') {
+        response.status(409).json({ error: 'This invoice is not an internal testnet invoice.' });
+        return;
+      }
 
       const updatedInvoice = await reconcileInvoicePayment(
         invoiceRepository,
-        settlementAdapter,
+        internalTestnetAdapter,
         invoice,
         {
           txHash: validateTransactionHash(request.body?.txHash),
@@ -277,6 +382,7 @@ export function createApp(
         status: invoice.status,
         amountUsdt0: invoice.amountUsdt0,
         paymentUrl: invoice.paymentUrl,
+        paymentNetwork: invoice.paymentNetwork ?? 'x-layer-mainnet',
         ...(invoice.externalOrderReference ? { externalOrderReference: invoice.externalOrderReference } : {}),
         ...(invoice.paymentTxHash ? { paymentTxHash: invoice.paymentTxHash } : {}),
         ...(invoice.paidAt ? { paidAt: invoice.paidAt } : {}),
@@ -334,4 +440,5 @@ export function createApp(
 
 export const app = createApp(undefined, undefined, {
   mainnetApprovalPreparation: createMainnetApprovalPreparationService(),
+  mainnetPayment: createMainnetPaymentService(),
 });

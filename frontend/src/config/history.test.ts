@@ -35,6 +35,20 @@ describe('payment history formatting', () => {
     expect(hasVerifiedPaymentEvidence(paidInvoice)).toBe(true);
   });
 
+  it('keeps mainnet asset names and explorer URLs separate from historical testnet receipts', () => {
+    const mainnetInvoice: Invoice = {
+      ...paidInvoice,
+      paymentNetwork: 'x-layer-mainnet',
+      spentAsset: '0xa8ddb5cd96b5222afe198316e9a57caa642850d5',
+      spentAmount: '4800000000000000',
+    };
+    expect(formatSpentAmount(mainnetInvoice)).toBe('0.0048 wNVDAx');
+    expect(getExplorerTransactionUrl(mainnetInvoice.paymentTxHash, mainnetInvoice.paymentNetwork))
+      .toContain('/web3/explorer/xlayer/tx/');
+    expect(getExplorerTransactionUrl(paidInvoice.paymentTxHash, 'x-layer-testnet'))
+      .toContain('/web3/explorer/xlayer-test/tx/');
+  });
+
   it('rejects unsafe or incomplete transaction evidence', () => {
     expect(getExplorerTransactionUrl(undefined)).toBeUndefined();
     expect(getExplorerTransactionUrl('0x123')).toBeUndefined();

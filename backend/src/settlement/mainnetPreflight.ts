@@ -201,7 +201,7 @@ export async function readMainnetBalances(
   };
 }
 
-async function estimateBufferedGas(
+export async function estimateBufferedGas(
   publicClient: MainnetReadOnlyClient,
   approval: PreparedMainnetTransaction,
   swap: PreparedMainnetTransaction,

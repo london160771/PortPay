@@ -1,5 +1,5 @@
 import { formatUnits, isAddress, type Address } from 'viem';
-import { portPayNetworkConfig } from './network';
+import { internalTestnetNetworkConfig, mainnetNetworkConfig } from './network';
 
 export const erc20BalanceAbi = [
   {
@@ -43,7 +43,7 @@ export const portfolioAssets = {
     key: 'demoAapl',
     label: 'DemoAAPL',
     description: 'Test asset · not an official xStock or real Apple-backed security',
-    address: portPayNetworkConfig.demoAssetAddresses.demoAapl,
+    address: internalTestnetNetworkConfig.demoAssetAddresses.demoAapl,
     referencePriceUsd: '250.00',
     decimals: 18,
   },
@@ -51,7 +51,7 @@ export const portfolioAssets = {
     key: 'demoNvda',
     label: 'DemoNVDA',
     description: 'Test asset · not an official xStock or real NVIDIA-backed security',
-    address: portPayNetworkConfig.demoAssetAddresses.demoNvda,
+    address: internalTestnetNetworkConfig.demoAssetAddresses.demoNvda,
     referencePriceUsd: '180.00',
     decimals: 18,
   },
@@ -63,7 +63,31 @@ export const testnetAssets = {
     key: 'usdt0',
     label: 'USD₮0',
     description: 'Official X Layer Testnet settlement stablecoin',
-    address: portPayNetworkConfig.stablecoinAddress,
+    address: internalTestnetNetworkConfig.stablecoinAddress,
+  },
+} as const;
+
+export const mainnetAssets = {
+  wNvda: {
+    key: 'wNvda',
+    label: 'wNVDAx',
+    description: 'Supported X Layer tokenized asset',
+    address: mainnetNetworkConfig.wNvdaAddress,
+    decimals: 18,
+  },
+  wAapl: {
+    key: 'wAapl',
+    label: 'wAAPLx',
+    description: 'Supported X Layer tokenized asset',
+    address: mainnetNetworkConfig.wAaplAddress,
+    decimals: 18,
+  },
+  usdt0: {
+    key: 'usdt0',
+    label: 'USD₮0',
+    description: 'X Layer Mainnet stablecoin',
+    address: mainnetNetworkConfig.usdt0Address,
+    decimals: 6,
   },
 } as const;
 

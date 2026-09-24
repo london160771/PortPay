@@ -15,7 +15,7 @@ import {
 } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
 import { portPayAddressConfig, xLayerTestnet } from '../config/xlayer.js';
-import type { Invoice, PaymentEvidence } from '../invoices/types.js';
+import type { Invoice } from '../invoices/types.js';
 import {
   validateMerchantAddress,
   validateTransactionHash,
@@ -23,6 +23,7 @@ import {
 import type {
   ReconcilePaymentInput,
   SettlementAdapter,
+  SettlementPaymentEvidence,
   SettlementQuoteData,
   SettlementQuoteResponse,
 } from './types.js';
@@ -346,7 +347,7 @@ export class TestnetSettlementAdapter implements SettlementAdapter {
     };
   }
 
-  async reconcilePayment(invoice: Invoice, input: ReconcilePaymentInput): Promise<PaymentEvidence> {
+  async reconcilePayment(invoice: Invoice, input: ReconcilePaymentInput): Promise<SettlementPaymentEvidence> {
     const txHash = validateTransactionHash(input.txHash);
     const buyer = normalizeBuyer(input.buyerAddress);
     const merchant = normalizeAddress(invoice.merchantAddress, 'Merchant wallet');

@@ -1,6 +1,7 @@
 import { createServer } from 'node:http';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { createApp } from '../app.js';
+import { reconcileInvoicePayment } from './settlement.js';
 import { InMemoryInvoiceRepository, mapInvoiceRow, type InvoiceRow } from './repository.js';
 import type { Invoice } from './types.js';
 import type { SettlementAdapter } from '../settlement/types.js';
@@ -60,6 +61,12 @@ describe('merchant invoice API', () => {
     expect(mapped.settlementBlockNumber).toBe(LARGE_INTEGER);
     expect(() => mapInvoiceRow({ ...row, spent_amount: Number.MAX_SAFE_INTEGER + 2 }))
       .toThrow('spent_amount must be returned from Supabase as text');
+
+    expect(mapInvoiceRow({ ...row, payment_network: null }).paymentNetwork).toBe('x-layer-testnet');
+    expect(mapInvoiceRow({ ...row, payment_network: 'x-layer-testnet' }).paymentNetwork).toBe('x-layer-testnet');
+    expect(mapInvoiceRow({ ...row, payment_network: 'x-layer-mainnet' }).paymentNetwork).toBe('x-layer-mainnet');
+    expect(() => mapInvoiceRow({ ...row, payment_network: 'x-layer-unknown' }))
+      .toThrow('Invoice row contains an unsupported payment_network value.');
   });
 
   it('creates, persists, lists, and resolves an invoice through its payment link ID', async () => {
@@ -83,6 +90,7 @@ describe('merchant invoice API', () => {
       expect(created.invoice.amountUsdt0).toBe('20');
       expect(created.invoice.merchantAddress).toBe(MERCHANT);
       expect(created.invoice.status).toBe('pending');
+      expect(created.invoice.paymentNetwork).toBe('x-layer-mainnet');
       expect(created.invoice.paymentUrl).toBe(`http://localhost:5173/pay/${created.invoice.id}`);
       expect(await repository.findById(created.invoice.id)).toEqual(created.invoice);
 
@@ -154,6 +162,30 @@ describe('merchant invoice API', () => {
     });
   });
 
+  it('does not route a mainnet invoice through the internal testnet reconciliation boundary', async () => {
+    const adapter = {
+      name: 'OKXDEXMainnetAdapter',
+      reconcilePayment: vi.fn(),
+    } as unknown as SettlementAdapter;
+    const invoice: Invoice = {
+      id: '00000000-0000-4000-8000-000000000003',
+      title: 'Mainnet invoice',
+      amountUsdt0: '1',
+      merchantAddress: MERCHANT,
+      paymentUrl: 'http://localhost:5173/pay/00000000-0000-4000-8000-000000000003',
+      status: 'pending',
+      paymentNetwork: 'x-layer-mainnet',
+      createdAt: '2026-09-24T00:00:00.000Z',
+      updatedAt: '2026-09-24T00:00:00.000Z',
+    };
+
+    await expect(reconcileInvoicePayment(new InMemoryInvoiceRepository(), adapter, invoice, {
+      txHash: `0x${'1'.repeat(64)}`,
+      buyerAddress: BUYER as `0x${string}`,
+    })).rejects.toThrow(/testnet-bound invoice and adapter/);
+    expect(adapter.reconcilePayment).not.toHaveBeenCalled();
+  });
+
   it('issues a buyer quote and reconciles a confirmed adapter payment into paid status', async () => {
     const repository = new InMemoryInvoiceRepository();
     const adapter: SettlementAdapter = {
@@ -222,7 +254,7 @@ describe('merchant invoice API', () => {
       const createResponse = await fetch(`${baseUrl}/api/invoices`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ title: 'Coffee beans', amountUsdt0: '20', merchantAddress: MERCHANT }),
+        body: JSON.stringify({ title: 'Coffee beans', amountUsdt0: '20', merchantAddress: MERCHANT, paymentNetwork: 'x-layer-testnet' }),
       });
       const created = (await createResponse.json()) as { invoice: Invoice };
 
@@ -247,6 +279,7 @@ describe('merchant invoice API', () => {
       const reconciled = (await reconcileResponse.json()) as { invoice: Invoice };
       expect(reconcileResponse.status).toBe(200);
       expect(reconciled.invoice.status).toBe('paid');
+      expect(reconciled.invoice.paymentNetwork).toBe('x-layer-testnet');
       expect(reconciled.invoice.paymentTxHash).toBe(txHash);
       expect(reconciled.invoice.stablecoinReceived).toBe('20');
       expect(reconciled.invoice.smartSpendUsed).toBe(true);
@@ -371,9 +404,9 @@ describe('merchant invoice API', () => {
       const statusResponse = await fetch(`${baseUrl}/api/integration/invoices/${created.invoice.id}/status`, {
         headers: { authorization: 'Bearer integration-test-key' },
       });
-      const status = (await statusResponse.json()) as { invoiceId: string; status: string; paymentUrl: string };
+      const status = (await statusResponse.json()) as { invoiceId: string; status: string; paymentUrl: string; paymentNetwork: string };
       expect(statusResponse.status).toBe(200);
-      expect(status).toMatchObject({ invoiceId: created.invoice.id, status: 'pending', paymentUrl: created.invoice.paymentUrl });
+      expect(status).toMatchObject({ invoiceId: created.invoice.id, status: 'pending', paymentUrl: created.invoice.paymentUrl, paymentNetwork: 'x-layer-mainnet' });
 
       const otherMerchantResponse = await fetch(`${baseUrl}/api/integration/invoices/${created.invoice.id}/status`, {
         headers: { authorization: 'Bearer other-integration-key' },

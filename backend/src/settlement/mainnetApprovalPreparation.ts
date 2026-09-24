@@ -3,6 +3,7 @@ import type { Invoice } from '../invoices/types.js';
 import { mainnetAddressConfig, mainnetSupportedAssets, VERIFIED_TESTNET_BUILDER_CODE } from '../config/xlayerMainnet.js';
 import { OkxDexApiClient } from './okxDexApi.js';
 import {
+  MAINNET_MAX_SLIPPAGE_PERCENT,
   OKXDEXMainnetAdapter,
   type MainnetQuote,
   type PreparedMainnetTransaction,
@@ -19,6 +20,7 @@ import {
 } from './mainnetPreflight.js';
 
 export const MAINNET_APPROVAL_PROOF_INPUT = '4800000000000000';
+export const MAINNET_APPROVAL_PROOF_SLIPPAGE_PERCENT = MAINNET_MAX_SLIPPAGE_PERCENT;
 
 const approvalAbi = [{
   type: 'function', name: 'approve', stateMutability: 'nonpayable',
@@ -115,6 +117,7 @@ export function createMainnetApprovalPreparationService(dependencies: MainnetApp
       assetKey: 'wNvda',
       buyerAddress,
       invoice,
+      slippagePercent: MAINNET_APPROVAL_PROOF_SLIPPAGE_PERCENT,
     });
     const approval: PreparedMainnetTransaction = await adapter.prepareApprovalTransaction(quote);
     const result = await preflight({

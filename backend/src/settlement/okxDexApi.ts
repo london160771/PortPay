@@ -14,8 +14,20 @@ export type OkxQuoteRequest = { amount: string; fromTokenAddress: string; toToke
 export type OkxApprovalRequest = { approveAmount: string; tokenContractAddress: string };
 export type OkxSwapRequest = OkxQuoteRequest & { slippagePercent: string; swapReceiverAddress: string; userWalletAddress: string };
 
+export type OkxTransportFailure = {
+  name: string;
+  code?: string | number;
+  causeName?: string;
+  causeCode?: string | number;
+};
+
 export class OkxDexApiError extends Error {
-  constructor(message: string, readonly status?: number, readonly apiCode?: string) { super(message); this.name = 'OkxDexApiError'; }
+  constructor(
+    message: string,
+    readonly status?: number,
+    readonly apiCode?: string,
+    readonly transportFailure?: OkxTransportFailure,
+  ) { super(message); this.name = 'OkxDexApiError'; }
 }
 
 export type OkxDexApiClientOptions = { apiKey?: string; fetchFn?: FetchLike; now?: () => Date; passphrase?: string; secretKey?: string };
@@ -24,6 +36,25 @@ const isRecord = (value: unknown): value is Record<string, unknown> => typeof va
 const isString = (value: unknown): value is string => typeof value === 'string';
 const isDigits = (value: unknown): value is string => isString(value) && /^\d+$/.test(value);
 const isHex = (value: unknown): value is `0x${string}` => isString(value) && /^0x(?:[0-9a-fA-F]{2})+$/.test(value);
+
+function transportFailure(error: unknown): OkxTransportFailure {
+  const outer = typeof error === 'object' && error !== null ? error as Record<string, unknown> : {};
+  const cause = typeof outer.cause === 'object' && outer.cause !== null ? outer.cause as Record<string, unknown> : {};
+  const safeName = (value: unknown): string => typeof value === 'string' && /^[A-Za-z][A-Za-z0-9_.-]{0,79}$/.test(value) ? value : 'UnknownError';
+  const safeCode = (value: unknown): string | number | undefined => {
+    if (typeof value === 'number' && Number.isSafeInteger(value) && value >= 0) return value;
+    if (typeof value === 'string' && /^[A-Za-z0-9_.-]{1,80}$/.test(value)) return value;
+    return undefined;
+  };
+  const summary: OkxTransportFailure = { name: safeName(outer.name) };
+  const code = safeCode(outer.code);
+  const causeName = safeName(cause.name);
+  const causeCode = safeCode(cause.code);
+  if (code !== undefined) summary.code = code;
+  if (causeName !== 'UnknownError') summary.causeName = causeName;
+  if (causeCode !== undefined) summary.causeCode = causeCode;
+  return summary;
+}
 
 function normalizeSupportedChainIndex(value: unknown): string | undefined {
   if (isDigits(value)) return value;
@@ -126,8 +157,13 @@ export class OkxDexApiClient {
         redirect: 'error',
         signal: AbortSignal.timeout(10_000),
       });
-    } catch {
-      throw new OkxDexApiError('The OKX DEX API request failed before receiving a response.');
+    } catch (error) {
+      throw new OkxDexApiError(
+        'The OKX DEX API request failed before receiving a response.',
+        undefined,
+        undefined,
+        transportFailure(error),
+      );
     }
     let body: unknown;
     try { body = await response.json(); } catch { throw new OkxDexApiError('The OKX DEX API returned a non-JSON response.', response.status); }
