@@ -28,6 +28,7 @@ import {
   recoverMainnetSubmission,
   reconcileMainnetPayment,
   type Invoice,
+  type MainnetApprovalPreparation,
   type MainnetApprovalPreparationResponse,
   type MainnetSubmissionResponse,
   type SettlementQuote,
@@ -69,6 +70,7 @@ import {
   canOfferMainnetPay,
   clearMainnetSubmissionRecovery,
   mainnetPreparationNeedsRefresh,
+  MAINNET_PRE_PROMPT_MIN_REMAINING_MS,
   readMainnetSubmissionRecovery,
   saveMainnetSubmissionRecovery,
   validateMainnetPrePromptReadiness,
@@ -1245,6 +1247,7 @@ function MainnetApprovalPanel({ invoice, onPaid }: { invoice: Invoice; onPaid: (
   const [transactionHash, setTransactionHash] = useState<`0x${string}` | null>(submissionRecovery?.transactionHash ?? null);
   const preparationReachedReady = useRef(Boolean(submissionRecovery));
   const recoveryAttempted = useRef<string | null>(null);
+  const justInTimePreparationId = useRef<string | null>(null);
 
   const isPaying = payStage === 'rechecking' || payStage === 'wallet' || payStage === 'observing' || payStage === 'confirming';
 
@@ -1383,10 +1386,15 @@ function MainnetApprovalPanel({ invoice, onPaid }: { invoice: Invoice; onPaid: (
   }, [acceptPreparationResult, address, chainId, invoice.id, invoice.status, isConnected]);
 
   async function payPreparedMainnet() {
-    const preparation = preflight?.preparation;
-    if (!address || !publicClient || !preparation
-      || !canOfferMainnetPay(preflight, invoice, address, chainId)
-      || transactionHash) {
+    if (!preflight || !preflight.preparation) {
+      setPayError('A fresh READY preparation and connected buyer wallet are required.');
+      setPayStage('error');
+      return;
+    }
+    let preparation: MainnetApprovalPreparation = preflight.preparation;
+    let preparationResponse: MainnetApprovalPreparationResponse = preflight;
+    if (!address || !publicClient || !preparation || preflight?.status !== 'READY'
+      || preflight.existingPayment || invoice.status !== 'pending' || transactionHash) {
       setPayError('A fresh READY preparation and connected buyer wallet are required.');
       setPayStage('error');
       return;
@@ -1406,12 +1414,36 @@ function MainnetApprovalPanel({ invoice, onPaid }: { invoice: Invoice; onPaid: (
         setPayStage('idle');
         setPayError('An existing submitted payment was found. Resuming that transaction; no new payment will be prompted.');
       } else if (refreshed?.status === 'READY') {
+        justInTimePreparationId.current = refreshed.preparation?.preparationId ?? null;
         setPayStage('idle');
         setPayError('The preparation expired or was too close to expiry. A fresh preparation is ready; review it and click Pay again.');
       } else {
         setPayStage('error');
         setPayError('The preparation expired before handoff. No invoice attempt was consumed. Refresh or retry when the backend is available.');
       }
+    };
+
+    const reprepareForCurrentPay = async (): Promise<boolean> => {
+      const refreshed = await refreshPreparation(true);
+      if (refreshed?.status === 'HANDOFF_UNRESOLVED') {
+        setPayStage('unresolved');
+        setPayError(refreshed.reason);
+        return false;
+      }
+      if (refreshed?.status === 'SUBMITTED') {
+        setPayStage('idle');
+        setPayError('An existing submitted payment was found. Resuming that transaction; no new payment will be prompted.');
+        return false;
+      }
+      if (refreshed?.status !== 'READY' || !refreshed.preparation
+        || !canOfferMainnetPay(refreshed, invoice, address, chainId)) {
+        setPayStage('error');
+        setPayError(refreshed?.reason || 'A fresh persisted Mainnet preparation is not READY. No wallet prompt was opened.');
+        return false;
+      }
+      preparation = refreshed.preparation;
+      preparationResponse = refreshed;
+      return true;
     };
 
     const resumeSubmitted = async (result: Awaited<ReturnType<typeof recheckMainnetReadiness>>) => {
@@ -1433,10 +1465,21 @@ function MainnetApprovalPanel({ invoice, onPaid }: { invoice: Invoice; onPaid: (
     try {
       const rpcChainId = await publicClient.getChainId();
       if (rpcChainId !== 196 || chainId !== 196) throw new Error('The connected wallet and X Layer RPC must both report chain 196.');
+
+      // Prefer a full two-minute PortPay window. If OKX embeds a shorter
+      // deadline, fetch a fresh persisted swap just-in-time before any wallet prompt.
+      const alreadyPreparedJustInTime = justInTimePreparationId.current === preparation.preparationId;
+      justInTimePreparationId.current = null;
+      if (!alreadyPreparedJustInTime && mainnetPreparationNeedsRefresh(preparation.expiresAt)) {
+        if (!await reprepareForCurrentPay()) return;
+      }
+      if (!canOfferMainnetPay(preparationResponse, invoice, address, chainId)) {
+        throw new Error('The persisted preparation no longer matches this buyer, invoice, chain, or expiry. Refresh it before continuing.');
+      }
       if (!preparation.handoffMessage) throw new Error('The server did not supply a buyer handoff authorization message.');
 
       // Finish the expensive, read-only validation before any wallet message prompt.
-      if (mainnetPreparationNeedsRefresh(preparation.expiresAt)) {
+      if (mainnetPreparationNeedsRefresh(preparation.expiresAt, Date.now(), MAINNET_PRE_PROMPT_MIN_REMAINING_MS)) {
         await refreshExpiredPreparation();
         return;
       }
@@ -1457,7 +1500,7 @@ function MainnetApprovalPanel({ invoice, onPaid }: { invoice: Invoice; onPaid: (
       }
       const prePromptError = validateMainnetPrePromptReadiness(prePrompt, preparation, invoice, address, chainId);
       if (prePromptError) {
-        if (mainnetPreparationNeedsRefresh(preparation.expiresAt)) {
+        if (mainnetPreparationNeedsRefresh(preparation.expiresAt, Date.now(), MAINNET_PRE_PROMPT_MIN_REMAINING_MS)) {
           await refreshExpiredPreparation();
           return;
         }
@@ -1530,7 +1573,8 @@ function MainnetApprovalPanel({ invoice, onPaid }: { invoice: Invoice; onPaid: (
   const preparedValidationError = preflight?.preparation && address
     ? validatePreparedMainnetApproval(preflight.preparation, invoice, address, chainId)
     : 'A fresh preparation for the connected buyer is required.';
-  const showPayButton = canOfferMainnetPay(preflight, invoice, address, chainId)
+  const showPayButton = preflight?.status === 'READY' && Boolean(preflight.preparation) && !preflight.existingPayment
+    && invoice.status === 'pending' && Boolean(address) && chainId === xLayerMainnet.id
     && !transactionHash && payStage === 'idle';
 
   return (

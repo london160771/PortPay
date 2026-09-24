@@ -53,7 +53,7 @@ type BaseRequest = {
   toToken: Address;
 };
 
-const DEFAULT_QUOTE_TTL_SECONDS = 60;
+const DEFAULT_QUOTE_TTL_SECONDS = 120;
 export const MAINNET_MAX_SLIPPAGE_PERCENT = '1.5';
 const MAINNET_MAX_SLIPPAGE_BASIS_POINTS = 15_000n;
 const ZERO_ADDRESS = '0x0000000000000000000000000000000000000000';
@@ -336,6 +336,7 @@ export function validateMainnetSwapExecutionEvidence(quote: MainnetQuote, prepar
   const { preparationHash, ...fields } = evidence;
   const preparedAt = Date.parse(evidence.preparedAt);
   const expiresAt = Date.parse(evidence.expiresAt);
+  const quoteCreatedAt = Date.parse(quote.createdAt);
   const quoteExpiresAt = Date.parse(quote.expiresAt);
   const response = evidence.authenticatedResponse;
   const responseTx = response.tx;
@@ -349,7 +350,7 @@ export function validateMainnetSwapExecutionEvidence(quote: MainnetQuote, prepar
   const invoiceAmount = BigInt(quote.invoiceStablecoinAmount);
   const expectedMinimum = slippageFloor > invoiceAmount ? slippageFloor : invoiceAmount;
   const deadlineMs = Number(baseRequest.deadLine * 1000n);
-  const responseExpiresAt = Math.min(quoteExpiresAt, deadlineMs);
+  const responseExpiresAt = Math.min(preparedAt + (quoteExpiresAt - quoteCreatedAt), deadlineMs);
   const suffix = toMainnetBuilderCodeDataSuffix(evidence.builderCode);
   const attributedResponseData = suffix ? appendBuilderCodeSuffix(responseTx.data, suffix) : undefined;
   if (preparationHash !== swapPreparationHash(fields)
@@ -390,8 +391,8 @@ export function validateMainnetSwapExecutionEvidence(quote: MainnetQuote, prepar
     || BigInt(evidence.minimumReceiveAmount) < BigInt(quote.invoiceStablecoinAmount)
     || BigInt(evidence.minimumReceiveAmount) > BigInt(evidence.expectedOutputAmount)
     || BigInt(evidence.minimumReceiveAmount) < expectedMinimum
-    || !Number.isFinite(preparedAt) || !Number.isFinite(expiresAt) || !Number.isFinite(quoteExpiresAt)
-    || preparedAt >= expiresAt || expiresAt > quoteExpiresAt) {
+    || !Number.isFinite(preparedAt) || !Number.isFinite(expiresAt) || !Number.isFinite(quoteCreatedAt)
+    || !Number.isFinite(quoteExpiresAt) || preparedAt > quoteExpiresAt || preparedAt >= expiresAt) {
     throw new MainnetPreparationError('Final swap execution evidence does not match the invoice-bound quote intent.');
   }
 }
@@ -579,7 +580,7 @@ export class OKXDEXMainnetAdapter {
     });
     const preparedAt = this.now();
     const deadlineMs = Number(transaction.deadline * 1000n);
-    const expiresAtMs = Math.min(Date.parse(quote.expiresAt), deadlineMs);
+    const expiresAtMs = Math.min(preparedAt.getTime() + this.quoteTtlSeconds * 1000, deadlineMs);
     if (!Number.isSafeInteger(deadlineMs) || expiresAtMs <= preparedAt.getTime()) {
       throw new MainnetPreparationError('OKX swap preparation is expired or has an invalid deadline.');
     }

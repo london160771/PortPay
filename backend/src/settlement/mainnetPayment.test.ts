@@ -125,6 +125,19 @@ async function setup(options: ClientOptions = {}, baseIso = nowIso, sharedReposi
 }
 
 describe('mainnet payment readiness and submitted transaction infrastructure', () => {
+  it('uses the configured 120-second quote window but caps persisted expiry at the embedded OKX deadline', async () => {
+    const value = await setup();
+    expect(Date.parse(value.quote.expiresAt) - Date.parse(nowIso)).toBe(120_000);
+    expect(value.evidence.expiresAt).toBe(new Date(Date.parse(nowIso) + 55_000).toISOString());
+
+    value.setClock(new Date(Date.parse(value.evidence.expiresAt) - MAINNET_PRE_PROMPT_MIN_REMAINING_MS + 1));
+    const result = await value.service.recheck(invoice, value.evidence.id, buyer, undefined, { preflightOnly: true });
+
+    expect(result).toMatchObject({ status: 'EXPIRED', ready: false });
+    await expect(value.repository.getHandoffForInvoice(invoice.id)).resolves.toBeNull();
+    expect(await value.service.getAttemptStatus(invoice)).toBe('none');
+  });
+
   it('runs the final wallet preflight before signing, with no handoff or wallet transaction returned', async () => {
     const value = await setup();
     const verifySignature = vi.fn(async () => true);

@@ -86,7 +86,7 @@ function encodedSwapData(receiver: Address = merchant, overrides: Partial<{
   fromTokenAmount: bigint;
   minReturnAmount: bigint;
   toToken: Address;
-}> = {}): Hex {
+}> = {}, deadline = 1_790_000_000n): Hex {
   return encodeFunctionData({
     abi: swapAbi,
     functionName: 'dagSwapTo',
@@ -95,7 +95,7 @@ function encodedSwapData(receiver: Address = merchant, overrides: Partial<{
       toToken: overrides.toToken ?? mainnetAddressConfig.usdt0 as Address,
       fromTokenAmount: overrides.fromTokenAmount ?? BigInt(inputAmount),
       minReturnAmount: overrides.minReturnAmount ?? 1_000_000n,
-      deadLine: 1_790_000_000n,
+      deadLine: deadline,
     }, [{
       mixAdapters: [merchant],
       assetTo: [mainnetAddressConfig.usdt0 as Address],
@@ -133,12 +133,13 @@ class FakeOkxClient {
   async getSwapTransaction() { return this.swap; }
 }
 
-function createAdapter(fake = new FakeOkxClient(), nowValue = '2026-09-21T00:00:00.000Z') {
+function createAdapter(fake = new FakeOkxClient(), nowValue = '2026-09-21T00:00:00.000Z', quoteTtlSeconds?: number) {
   return {
     adapter: new OKXDEXMainnetAdapter({
       apiClient: fake as unknown as OkxDexApiClient,
       builderCode: 'mainnetcode12345',
       now: () => new Date(nowValue),
+      quoteTtlSeconds,
     }),
     fake,
   };
@@ -154,6 +155,40 @@ async function createQuote(adapter: OKXDEXMainnetAdapter) {
 }
 
 describe('OKXDEXMainnetAdapter preparation boundary', () => {
+  it('targets a 120-second PortPay quote window but never outlives the OKX calldata deadline', async () => {
+    const createdAt = Date.parse('2026-09-21T00:00:00.000Z');
+    const nowSeconds = BigInt(Math.floor(createdAt / 1000));
+    let clock = new Date(createdAt);
+    const longDeadlineApi = new FakeOkxClient();
+    longDeadlineApi.getSwapTransaction = async () => {
+      clock = new Date(createdAt + 10_000);
+      return swapData(encodedSwapData(merchant, {}, nowSeconds + 180n));
+    };
+    const longWindow = new OKXDEXMainnetAdapter({
+      apiClient: longDeadlineApi as unknown as OkxDexApiClient,
+      builderCode: 'mainnetcode12345',
+      now: () => new Date(clock),
+    });
+    const longQuote = await createQuote(longWindow);
+    const longPreparation = await longWindow.prepareSwapTransaction(longQuote);
+
+    expect(Date.parse(longQuote.expiresAt) - createdAt).toBe(120_000);
+    expect(longPreparation.execution?.preparedAt).toBe(new Date(createdAt + 10_000).toISOString());
+    expect(Date.parse(longPreparation.execution!.expiresAt) - Date.parse(longPreparation.execution!.preparedAt)).toBe(120_000);
+    expect(Date.parse(longPreparation.execution!.expiresAt)).toBeGreaterThan(Date.parse(longQuote.expiresAt));
+
+    const shortDeadline = nowSeconds + 45n;
+    const shortDeadlineApi = new FakeOkxClient();
+    shortDeadlineApi.swap = swapData(encodedSwapData(merchant, {}, shortDeadline));
+    const shortWindow = createAdapter(shortDeadlineApi);
+    const shortQuote = await createQuote(shortWindow.adapter);
+    const shortPreparation = await shortWindow.adapter.prepareSwapTransaction(shortQuote);
+
+    expect(Date.parse(shortQuote.expiresAt) - createdAt).toBe(120_000);
+    expect(Date.parse(shortPreparation.execution!.expiresAt)).toBe(Number(shortDeadline) * 1000);
+    expect(Date.parse(shortPreparation.execution!.expiresAt)).toBeLessThan(Date.parse(shortPreparation.execution!.preparedAt) + 120_000);
+  });
+
   it('returns only the configured chain-196 supported assets and binds a quote to the invoice', async () => {
     const { adapter } = createAdapter();
     expect(adapter.getSupportedAssets().map((asset) => asset.symbol)).toEqual(['wNVDAx', 'wAAPLx']);
@@ -257,7 +292,7 @@ describe('OKXDEXMainnetAdapter preparation boundary', () => {
       now: () => new Date(staleClock.value),
     });
     const staleQuote = await createQuote(staleAdapter);
-    staleClock.value = '2026-09-21T00:01:01.000Z';
+    staleClock.value = '2026-09-21T00:02:01.000Z';
     await expect(staleAdapter.prepareSwapTransaction(staleQuote)).rejects.toThrow('expired');
 
     const wrongMerchant = new FakeOkxClient();
@@ -487,7 +522,7 @@ describe('OKXDEXMainnetAdapter preparation boundary', () => {
     expect(prepared.execution?.attributedSwapCalldataHash).toBeTruthy();
     expect(prepared.execution?.previewQuoteHash).toBeTruthy();
     expect(prepared.execution?.preparedAt).toBe('2026-09-21T00:00:00.000Z');
-    expect(Date.parse(prepared.execution!.expiresAt)).toBeLessThanOrEqual(Date.parse(quote.expiresAt));
+    expect(Date.parse(prepared.execution!.expiresAt)).toBeLessThanOrEqual(Date.parse(prepared.execution!.preparedAt) + 120_000);
     await expect(adapter.validatePreparedTransaction(quote, {
       ...prepared,
       attributedData: `${prepared.attributedData!.slice(0, -2)}00` as Hex,
