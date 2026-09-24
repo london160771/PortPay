@@ -165,7 +165,10 @@ export function createApp(
         return;
       }
 
-      response.json({ invoice: publicInvoice(invoice) });
+      const mainnetAttemptStatus = invoice.status === 'pending' && invoice.paymentNetwork === 'x-layer-mainnet' && mainnetPayment
+        ? await mainnetPayment.getAttemptStatus(invoice)
+        : undefined;
+      response.json({ invoice: { ...publicInvoice(invoice), ...(mainnetAttemptStatus ? { mainnetAttemptStatus } : {}) } });
     } catch (error) {
       next(error);
     }
@@ -237,12 +240,16 @@ export function createApp(
       const invoiceId = validateInvoiceId(request.params.invoiceId);
       const preparationId = validateInvoiceId(request.body?.preparationId);
       const buyerAddress = validateWalletAddress(request.body?.buyerAddress, 'Buyer wallet') as `0x${string}`;
+      const buyerSignature = request.body?.buyerSignature;
+      if (typeof buyerSignature !== 'string' || !/^0x[0-9a-fA-F]{130}$/.test(buyerSignature)) {
+        response.status(400).json({ error: 'A buyer wallet handoff signature is required.' }); return;
+      }
       const invoice = await invoiceRepository.findById(invoiceId);
       if (!invoice) { response.status(404).json({ error: 'Invoice not found.' }); return; }
       if (invoice.paymentNetwork !== 'x-layer-mainnet') { response.status(409).json({ error: 'Mainnet readiness requires a mainnet-bound invoice.' }); return; }
       if (invoice.status !== 'pending') { response.status(409).json({ error: 'Only a pending invoice can be rechecked.' }); return; }
       if (!mainnetPayment) { response.status(503).json({ error: 'Mainnet preparation recheck is not configured.' }); return; }
-      response.json(await mainnetPayment.recheck(invoice, preparationId, buyerAddress));
+      response.json(await mainnetPayment.recheck(invoice, preparationId, buyerAddress, buyerSignature as `0x${string}`));
     } catch (error) { next(error); }
   });
 
@@ -262,6 +269,20 @@ export function createApp(
       } catch {
         response.status(409).json({ error: 'The transaction was not recorded; verify it matches a fresh persisted mainnet preparation.' });
       }
+    } catch (error) { next(error); }
+  });
+
+  app.post('/api/invoices/:invoiceId/mainnet/submission-recovery', async (request, response, next) => {
+    try {
+      const invoiceId = validateInvoiceId(request.params.invoiceId);
+      const preparationId = validateInvoiceId(request.body?.preparationId);
+      const buyerAddress = validateWalletAddress(request.body?.buyerAddress, 'Buyer wallet') as `0x${string}`;
+      const invoice = await invoiceRepository.findById(invoiceId);
+      if (!invoice) { response.status(404).json({ error: 'Invoice not found.' }); return; }
+      if (invoice.paymentNetwork !== 'x-layer-mainnet') { response.status(409).json({ error: 'Mainnet submission recovery requires a mainnet-bound invoice.' }); return; }
+      if (invoice.status !== 'pending') { response.status(409).json({ error: 'Only a pending invoice can recover a mainnet submission.' }); return; }
+      if (!mainnetPayment) { response.status(503).json({ error: 'Mainnet submission recovery is not configured.' }); return; }
+      response.json({ submission: await mainnetPayment.recoverSubmission(invoice, preparationId, buyerAddress) });
     } catch (error) { next(error); }
   });
 

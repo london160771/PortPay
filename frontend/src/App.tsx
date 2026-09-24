@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { Address } from 'viem';
 import { formatUnits } from 'viem';
 import {
@@ -9,6 +9,7 @@ import {
   useReadContract,
   useSwitchChain,
   useSendTransaction,
+  useSignMessage,
   useWriteContract,
 } from 'wagmi';
 import {
@@ -21,8 +22,13 @@ import {
   getMerchantPaymentHistory,
   reconcileInvoicePayment,
   prepareMainnetApproval,
+  recheckMainnetReadiness,
+  recordMainnetSubmission,
+  recoverMainnetSubmission,
+  reconcileMainnetPayment,
   type Invoice,
-  type MainnetApprovalPreparation,
+  type MainnetApprovalPreparationResponse,
+  type MainnetSubmissionResponse,
   type SettlementQuote,
 } from './config/api';
 import { erc20BalanceAbi, formatTokenBalance, mainnetAssets, parseConfiguredAddress, portfolioAssets, testnetAssets } from './config/assets';
@@ -58,6 +64,14 @@ import {
   readBuilderCodePayoutAddress,
 } from './config/builderCodes';
 import { validatePreparedMainnetApproval } from './config/mainnetApproval';
+import {
+  canOfferMainnetPay,
+  clearMainnetSubmissionRecovery,
+  readMainnetSubmissionRecovery,
+  saveMainnetSubmissionRecovery,
+  validateReadyMainnetHandoff,
+  type MainnetSubmissionRecovery,
+} from './config/mainnetPayment';
 
 
 type TokenBalanceCardProps = {
@@ -484,7 +498,7 @@ function DemoJourney() {
   const steps = [
     { number: '01', title: 'Request', detail: 'Merchant sets a real USD₮0 amount and shares one hosted link.' },
     { number: '02', title: 'Prepare', detail: 'Buyer reviews a supported tokenized asset and exact approval details.' },
-    { number: '03', title: 'Complete later', detail: 'Final swap execution remains disabled pending final security review and authorization.' },
+    { number: '03', title: 'Confirm & verify', detail: 'Buyer confirms the prepared payment in their wallet; PortPay verifies canonical evidence before marking the invoice paid.' },
   ];
 
   return (
@@ -511,7 +525,7 @@ function DemoJourney() {
         ))}
       </div>
       <div className="mt-7 rounded-2xl border border-mint/20 bg-mint/10 p-4 text-xs leading-5 text-white/65">
-        <span className="font-semibold text-mint">Execution status.</span> Mainnet invoice and exact approval preparation are available; buyer-signed swaps remain disabled pending final security review and authorization.
+        <span className="font-semibold text-mint">Mainnet Pay.</span> Buyer-signed payment is implemented and requires explicit OKX Wallet confirmation. The backend never signs or broadcasts; paid status follows canonical verification. Real use remains subject to final review and authorization.
       </div>
     </aside>
   );
@@ -1210,32 +1224,123 @@ function BuyerWalletPanel({
   );
 }
 
-function MainnetApprovalPanel({ invoice }: { invoice: Invoice }) {
+function MainnetApprovalPanel({ invoice, onPaid }: { invoice: Invoice; onPaid: (invoice: Invoice) => void }) {
   const { address, chainId, isConnected } = useAccount();
   const { connect, error: connectError, isPending: isConnecting } = useConnect();
   const { switchChain, error: switchError, isPending: isSwitching } = useSwitchChain();
   const { sendTransactionAsync, isPending: isWalletPromptOpen } = useSendTransaction();
+  const { signMessageAsync, isPending: isHandoffSignatureOpen } = useSignMessage();
   const publicClient = usePublicClient({ chainId: xLayerMainnet.id });
-  const [preflight, setPreflight] = useState<{ status: string; reason: string; preparation?: MainnetApprovalPreparation } | null>(null);
+  const [submissionRecovery, setSubmissionRecovery] = useState(() => readMainnetSubmissionRecovery(invoice.id));
+  const [preflight, setPreflight] = useState<MainnetApprovalPreparationResponse | null>(
+    submissionRecovery ? { status: 'SUBMITTED', reason: 'Resuming the same server-validated transaction; no new payment will be prepared.' } : null,
+  );
   const [isPreparing, setIsPreparing] = useState(false);
-  const [isConfirmingApproval, setIsConfirmingApproval] = useState(false);
   const [preparationError, setPreparationError] = useState('');
-  const [approvalError, setApprovalError] = useState('');
-  const [approvalHash, setApprovalHash] = useState<`0x${string}` | null>(null);
-  const [confirmedAmount, setConfirmedAmount] = useState<string | null>(null);
+  const [payStage, setPayStage] = useState<'idle' | 'rechecking' | 'wallet' | 'observing' | 'confirming' | 'error' | 'cancelled' | 'unresolved'>('idle');
+  const [payError, setPayError] = useState('');
+  const [transactionHash, setTransactionHash] = useState<`0x${string}` | null>(submissionRecovery?.transactionHash ?? null);
+  const preparationReachedReady = useRef(Boolean(submissionRecovery));
+  const recoveryAttempted = useRef<string | null>(null);
+
+  const isPaying = payStage === 'rechecking' || payStage === 'wallet' || payStage === 'observing' || payStage === 'confirming';
+
+  const acceptPreparationResult = useCallback((result: MainnetApprovalPreparationResponse) => {
+    setPreflight(result);
+    if (result.status === 'READY' || result.existingPayment) preparationReachedReady.current = true;
+    if (result.status === 'HANDOFF_UNRESOLVED') setPayStage('unresolved');
+    const existing = result.existingPayment;
+    if (existing?.transactionHash && address?.toLowerCase() === existing.buyer.toLowerCase()) {
+      const attempt: MainnetSubmissionRecovery = {
+        invoiceId: invoice.id, preparationId: existing.preparationId,
+        handoffId: existing.handoffId, transactionHash: existing.transactionHash, buyerAddress: existing.buyer,
+      };
+      saveMainnetSubmissionRecovery(attempt);
+      setSubmissionRecovery(attempt);
+      setTransactionHash(attempt.transactionHash);
+    }
+  }, [address, invoice.id]);
+
+  const observeSameMainnetTransaction = useCallback(async (attempt: MainnetSubmissionRecovery, recoverFromServer: boolean) => {
+    setPayError('');
+    setPayStage('observing');
+    try {
+      let exactAttempt = attempt;
+      let submission: MainnetSubmissionResponse | null = null;
+      if (recoverFromServer) {
+        const { submission: persisted } = await recoverMainnetSubmission(invoice.id, attempt.preparationId, attempt.buyerAddress);
+        if (persisted) {
+          if (persisted.preparationId !== attempt.preparationId || persisted.handoffId !== attempt.handoffId
+            || persisted.transactionHash.toLowerCase() !== attempt.transactionHash.toLowerCase()) {
+            throw new Error('The server-recorded submission does not match this page’s original transaction, preparation, and handoff.');
+          }
+          exactAttempt = { ...attempt, transactionHash: persisted.transactionHash };
+          saveMainnetSubmissionRecovery(exactAttempt);
+          setSubmissionRecovery(exactAttempt);
+          submission = persisted;
+        }
+      }
+
+      if (!submission) submission = await recordMainnetSubmission(
+        invoice.id, exactAttempt.preparationId, exactAttempt.handoffId, exactAttempt.transactionHash,
+      );
+      if (submission.status !== 'submitted' || submission.preparationId !== exactAttempt.preparationId
+        || submission.handoffId !== exactAttempt.handoffId
+        || submission.transactionHash.toLowerCase() !== exactAttempt.transactionHash.toLowerCase()) {
+        throw new Error('PortPay could not bind the same transaction to its persisted preparation and handoff.');
+      }
+
+      setPayStage('confirming');
+      for (let attemptNumber = 0; attemptNumber < 20; attemptNumber += 1) {
+        const reconciliation = await reconcileMainnetPayment(invoice.id, exactAttempt.preparationId, exactAttempt.transactionHash);
+        if (reconciliation.invoice) {
+          if (reconciliation.invoice.status !== 'paid' || reconciliation.invoice.paymentNetwork !== 'x-layer-mainnet'
+            || reconciliation.invoice.paymentTxHash?.toLowerCase() !== exactAttempt.transactionHash.toLowerCase()) {
+            throw new Error('PortPay returned payment data that does not match the verified Mainnet transaction.');
+          }
+          clearMainnetSubmissionRecovery(invoice.id);
+          setSubmissionRecovery(null);
+          onPaid(reconciliation.invoice);
+          setPayStage('idle');
+          return;
+        }
+        if (reconciliation.code !== 'CONFIRMING') {
+          throw new Error(reconciliation.error || 'PortPay could not verify the Mainnet settlement.');
+        }
+        if (attemptNumber < 19) await new Promise<void>((resolve) => window.setTimeout(resolve, 2500));
+      }
+      throw new Error('The same transaction is still awaiting canonical confirmation. Retry its status check; do not submit another payment.');
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'PortPay could not observe the submitted transaction yet.';
+      setPayError(`${message} The original transaction is retained for retry; no new preparation or wallet prompt will be created.`);
+      setPayStage('error');
+    }
+  }, [invoice.id, onPaid]);
+
+  useEffect(() => {
+    if (!submissionRecovery || submissionRecovery.invoiceId !== invoice.id) return;
+    preparationReachedReady.current = true;
+    if (!isConnected || !address || chainId !== xLayerMainnet.id) return;
+    if (address.toLowerCase() !== submissionRecovery.buyerAddress.toLowerCase()) {
+      setPayStage('error');
+      setPayError('Reconnect the buyer wallet that submitted this transaction to resume its verification.');
+      return;
+    }
+    const attemptKey = `${submissionRecovery.preparationId}:${submissionRecovery.handoffId}:${submissionRecovery.transactionHash.toLowerCase()}`;
+    if (recoveryAttempted.current === attemptKey) return;
+    recoveryAttempted.current = attemptKey;
+    void observeSameMainnetTransaction(submissionRecovery, true);
+  }, [address, chainId, invoice.id, isConnected, observeSameMainnetTransaction, submissionRecovery]);
 
   async function refreshPreparation() {
-    if (!address || chainId !== xLayerMainnet.id || invoice.status !== 'pending') return;
+    if (preparationReachedReady.current || !address || chainId !== xLayerMainnet.id || invoice.status !== 'pending') return;
     setIsPreparing(true);
     setPreparationError('');
-    setApprovalError('');
-    setApprovalHash(null);
-    setConfirmedAmount(null);
     try {
-      setPreflight(await prepareMainnetApproval(invoice.id, address));
+      acceptPreparationResult(await prepareMainnetApproval(invoice.id, address));
     } catch (error) {
       setPreflight(null);
-      setPreparationError(error instanceof ApiError ? error.message : 'Unable to prepare a mainnet approval.');
+      setPreparationError(error instanceof ApiError ? error.message : 'Unable to prepare the Mainnet payment.');
     } finally {
       setIsPreparing(false);
     }
@@ -1243,6 +1348,7 @@ function MainnetApprovalPanel({ invoice }: { invoice: Invoice }) {
 
   useEffect(() => {
     let active = true;
+    if (preparationReachedReady.current) return () => { active = false; };
     if (!isConnected || !address || chainId !== xLayerMainnet.id || invoice.status !== 'pending') {
       setPreflight(null);
       setPreparationError('');
@@ -1250,87 +1356,123 @@ function MainnetApprovalPanel({ invoice }: { invoice: Invoice }) {
     }
     setIsPreparing(true);
     setPreparationError('');
-    setApprovalError('');
-    setApprovalHash(null);
-    setConfirmedAmount(null);
     prepareMainnetApproval(invoice.id, address)
-      .then((result) => { if (active) setPreflight(result); })
+      .then((result) => {
+        if (active) {
+          acceptPreparationResult(result);
+        }
+      })
       .catch((error: unknown) => {
         if (active) {
           setPreflight(null);
-          setPreparationError(error instanceof ApiError ? error.message : 'Unable to prepare a mainnet approval.');
+          setPreparationError(error instanceof ApiError ? error.message : 'Unable to prepare the Mainnet payment.');
         }
       })
       .finally(() => { if (active) setIsPreparing(false); });
     return () => { active = false; };
-  }, [address, chainId, invoice.id, invoice.status, isConnected]);
+  }, [acceptPreparationResult, address, chainId, invoice.id, invoice.status, isConnected]);
 
-  async function approvePreparedAmount() {
+  async function payPreparedMainnet() {
     const preparation = preflight?.preparation;
-    if (!address || !publicClient || !preparation) {
-      setApprovalError('A fresh backend-prepared approval and connected buyer wallet are required.');
-      return;
-    }
-    const validationError = validatePreparedMainnetApproval(preparation, invoice, address, chainId);
-    if (validationError) {
-      setApprovalError(validationError);
+    if (!address || !publicClient || !preparation
+      || !canOfferMainnetPay(preflight, invoice, address, chainId)
+      || transactionHash) {
+      setPayError('A fresh READY preparation and connected buyer wallet are required.');
+      setPayStage('error');
       return;
     }
 
+    let handoffRequestStarted = false;
+    let submittedHash: `0x${string}` | null = null;
+    setPayError('');
+    setPayStage('rechecking');
     try {
       const rpcChainId = await publicClient.getChainId();
-      if (rpcChainId !== 196 || chainId !== 196) throw new Error('The wallet and X Layer RPC must both report chain 196.');
-      const currentAllowance = await publicClient.readContract({
-        address: preparation.token,
-        abi: erc20BalanceAbi,
-        functionName: 'allowance',
-        args: [address, preparation.spender],
-      });
-      if (currentAllowance === BigInt(preparation.amount)) {
-        setConfirmedAmount(preparation.amount);
-        setApprovalError('');
+      if (rpcChainId !== 196 || chainId !== 196) throw new Error('The connected wallet and X Layer RPC must both report chain 196.');
+      if (!preparation.handoffMessage) throw new Error('The server did not supply a buyer handoff authorization message.');
+      const buyerSignature = await signMessageAsync({ account: address, message: preparation.handoffMessage });
+      handoffRequestStarted = true;
+      const recheck = await recheckMainnetReadiness(invoice.id, preparation.preparationId, address, buyerSignature);
+      if (recheck.status === 'SUBMITTED') {
+        if (!recheck.transactionHash || !/^0x[0-9a-fA-F]{64}$/.test(recheck.transactionHash)
+          || recheck.preparationId !== preparation.preparationId || !recheck.handoffId) {
+          throw new Error('A submitted transaction exists, but its server recovery binding is incomplete. No new transaction will be prompted.');
+        }
+        const attempt: MainnetSubmissionRecovery = {
+          invoiceId: invoice.id, preparationId: preparation.preparationId,
+          handoffId: recheck.handoffId, transactionHash: recheck.transactionHash, buyerAddress: address,
+        };
+        saveMainnetSubmissionRecovery(attempt);
+        setSubmissionRecovery(attempt);
+        setTransactionHash(attempt.transactionHash);
+        recoveryAttempted.current = `${attempt.preparationId}:${attempt.handoffId}:${attempt.transactionHash.toLowerCase()}`;
+        await observeSameMainnetTransaction(attempt, true);
         return;
       }
-      if (Date.parse(preparation.expiresAt) <= Date.now()) throw new Error('This approval preparation expired. Refresh it before signing.');
+      if (recheck.status === 'HANDOFF_UNRESOLVED') {
+        preparationReachedReady.current = true;
+        setPayStage('unresolved');
+        setPayError(recheck.reason);
+        return;
+      }
+      const handoffError = validateReadyMainnetHandoff(recheck, preparation, invoice, address, chainId);
+      if (handoffError) throw new Error(handoffError);
+      const walletTransaction = recheck.walletTransaction;
+      if (!walletTransaction) throw new Error('The server did not return the persisted wallet transaction.');
 
-      setApprovalError('');
-      setIsConfirmingApproval(true);
+      preparationReachedReady.current = true;
+      setPayStage('wallet');
       const hash = await sendTransactionAsync({
         account: address,
-        to: preparation.token,
-        data: preparation.attributedApprovalCalldata,
-        value: 0n,
-        chainId: xLayerMainnet.id,
+        to: walletTransaction.to,
+        data: walletTransaction.data,
+        value: BigInt(walletTransaction.value),
+        chainId: walletTransaction.chainId,
       });
-      setApprovalHash(hash);
-      const receipt = await publicClient.waitForTransactionReceipt({ hash });
-      if (receipt.status !== 'success') throw new Error('The exact wNVDAx approval transaction reverted.');
-      const confirmedAllowance = await publicClient.readContract({
-        address: preparation.token,
-        abi: erc20BalanceAbi,
-        functionName: 'allowance',
-        args: [address, preparation.spender],
-      });
-      if (confirmedAllowance !== BigInt(preparation.amount)) throw new Error('The confirmed allowance does not exactly match the prepared amount.');
-      setConfirmedAmount(preparation.amount);
+      submittedHash = hash;
+      const attempt: MainnetSubmissionRecovery = {
+        invoiceId: invoice.id,
+        preparationId: preparation.preparationId,
+        handoffId: recheck.handoffId!,
+        transactionHash: hash,
+        buyerAddress: address,
+      };
+      preparationReachedReady.current = true;
+      recoveryAttempted.current = `${attempt.preparationId}:${attempt.handoffId}:${attempt.transactionHash.toLowerCase()}`;
+      saveMainnetSubmissionRecovery(attempt);
+      setSubmissionRecovery(attempt);
+      setTransactionHash(hash);
+      await observeSameMainnetTransaction(attempt, false);
     } catch (error) {
-      setApprovalError(error instanceof Error ? error.message : 'The approval could not be confirmed.');
-    } finally {
-      setIsConfirmingApproval(false);
+      const message = error instanceof Error ? error.message : 'The Mainnet payment handoff failed.';
+      const rejection = typeof error === 'object' && error !== null
+        && ('code' in error && error.code === 4001 || 'name' in error && error.name === 'UserRejectedRequestError');
+      if (handoffRequestStarted && !submittedHash) {
+        preparationReachedReady.current = true;
+        setPayStage(rejection ? 'cancelled' : 'unresolved');
+        setPayError(rejection
+          ? 'Payment cancelled in the wallet. This invoice cannot be retried; ask the merchant for a new invoice.'
+          : `Payment status unresolved. ${message} This invoice cannot be retried; check your wallet and ask the merchant for a new invoice if payment did not complete.`);
+      } else {
+        setPayStage(rejection ? 'cancelled' : 'error');
+        setPayError(message);
+      }
     }
   }
 
-  const explorerUrl = approvalHash ? `${mainnetNetworkConfig.explorerUrl}/tx/${approvalHash}` : '';
+  const explorerUrl = transactionHash ? `${mainnetNetworkConfig.explorerUrl}/tx/${transactionHash}` : '';
   const preparedValidationError = preflight?.preparation && address
     ? validatePreparedMainnetApproval(preflight.preparation, invoice, address, chainId)
     : 'A fresh preparation for the connected buyer is required.';
+  const showPayButton = canOfferMainnetPay(preflight, invoice, address, chainId)
+    && !transactionHash && payStage === 'idle';
 
   return (
     <section className="mt-5 rounded-2xl border border-ink/10 bg-cloud p-5">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-amber-800">Mainnet payment · approval only</p>
-          <p className="mt-1 text-sm leading-6 text-ink/65">PortPay will prepare a fresh exact approval. You must confirm it in OKX Wallet. No swap is available from this checkout.</p>
+          <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-amber-800">Mainnet payment · manual wallet confirmation</p>
+          <p className="mt-1 text-sm leading-6 text-ink/65">PortPay rechecks the existing persisted transaction immediately before Pay. No additional approval or automatic send is used.</p>
         </div>
         <span className="rounded-full bg-amber-100 px-3 py-1.5 text-[10px] font-bold uppercase tracking-[0.12em] text-amber-950">X Layer · 196</span>
       </div>
@@ -1349,14 +1491,14 @@ function MainnetApprovalPanel({ invoice }: { invoice: Invoice }) {
         </div>
       ) : (
         <div className="mt-4">
-          {isPreparing ? <p className="rounded-xl bg-white p-4 text-sm text-ink/60">Preparing and validating the exact approval with PortPay’s authenticated mainnet adapter…</p> : null}
+          {isPreparing ? <p className="rounded-xl bg-white p-4 text-sm text-ink/60">Preparing and validating the Mainnet payment…</p> : null}
           {preparationError ? <p className="rounded-xl border border-rose-200 bg-rose-50 p-4 text-sm text-rose-800">{preparationError}</p> : null}
           {preflight && !isPreparing ? (
             <div className="rounded-xl border border-ink/10 bg-white p-4">
-              <p className="text-sm font-semibold">{confirmedAmount ? 'Approval confirmed' : preflight.status === 'APPROVAL_REQUIRED' ? 'Exact approval required' : preflight.status === 'READY' ? 'Exact allowance confirmed' : 'Mainnet preflight blocked'}</p>
-              <p className="mt-1 text-sm leading-6 text-ink/60">{confirmedAmount ? 'The exact allowance is onchain. Continue only after a separate fresh final preflight; PortPay will not swap automatically.' : preflight.reason}</p>
+              <p className="text-sm font-semibold">{preflight.status === 'READY' ? 'Ready for final payment recheck' : preflight.status === 'HANDOFF_UNRESOLVED' ? 'Payment status unresolved' : preflight.status === 'SUBMITTED' ? 'Transaction submitted' : preflight.status === 'APPROVAL_REQUIRED' ? 'Existing exact allowance required' : 'Mainnet preflight blocked'}</p>
+              <p className="mt-1 text-sm leading-6 text-ink/60">{preflight.reason}</p>
               {preflight.preparation && preparedValidationError ? <p className="mt-3 text-sm text-rose-700">{preparedValidationError}</p> : null}
-              {preflight.preparation && !preparedValidationError && !confirmedAmount ? (
+              {preflight.preparation && !preparedValidationError ? (
                 <dl className="mt-4 grid gap-2 text-xs sm:grid-cols-2">
                   <div><dt className="text-ink/45">Asset / exact amount</dt><dd className="mt-0.5 font-semibold">wNVDAx · {formatUnits(BigInt(preflight.preparation.amount), 18)}</dd></div>
                   <div><dt className="text-ink/45">Minimum merchant receive</dt><dd className="mt-0.5 font-semibold">{formatUnits(BigInt(preflight.preparation.minimumReceive), 6)} USD₮0</dd></div>
@@ -1365,23 +1507,33 @@ function MainnetApprovalPanel({ invoice }: { invoice: Invoice }) {
                   <div><dt className="text-ink/45">Preparation ID</dt><dd className="mt-0.5 break-all font-mono">{preflight.preparation.preparationId}</dd></div>
                 </dl>
               ) : null}
-              {preflight.preparation && !preparedValidationError && !confirmedAmount ? (
-                <button type="button" className="mt-4 rounded-xl bg-ink px-4 py-3 text-sm font-bold text-white disabled:cursor-wait disabled:opacity-50" onClick={() => void approvePreparedAmount()} disabled={isConfirmingApproval || isWalletPromptOpen}>
-                  {isWalletPromptOpen ? 'Confirm exact approval in OKX Wallet…' : isConfirmingApproval ? 'Approval pending…' : `Approve ${formatUnits(BigInt(preflight.preparation.amount), 18)} wNVDAx`}
+              {preflight.status === 'APPROVAL_REQUIRED' ? <p className="mt-4 rounded-xl bg-amber-50 p-3 text-sm text-amber-900">This checkout will not request another token approval. The exact existing wNVDAx allowance must already be available.</p> : null}
+              {showPayButton && preflight.preparation ? (
+                <button type="button" className="mt-4 rounded-xl bg-ink px-4 py-3 text-sm font-bold text-white disabled:cursor-wait disabled:opacity-50" onClick={() => void payPreparedMainnet()} disabled={isPaying || isWalletPromptOpen || isHandoffSignatureOpen}>
+                  {`Pay ${formatUnits(BigInt(preflight.preparation.amount), 18)} wNVDAx`}
                 </button>
               ) : null}
-              {approvalHash ? <p className="mt-3 text-xs text-ink/65">Approval transaction: <a className="font-mono font-semibold underline" href={explorerUrl} target="_blank" rel="noreferrer">{approvalHash}</a></p> : null}
-              {confirmedAmount ? <p className="mt-3 text-sm font-semibold text-emerald-800">Ready for final preflight · exact allowance {formatUnits(BigInt(confirmedAmount), 18)} wNVDAx confirmed.</p> : null}
-              {approvalError ? <p className="mt-3 text-sm text-rose-700">{approvalError}</p> : null}
+              {payStage === 'rechecking' ? <p className="mt-3 text-sm text-ink/60">Rechecking invoice, buyer, chain, exact allowance, balances, Builder Code, expiry, and the same persisted calldata before opening the wallet.</p> : null}
+              {payStage === 'wallet' ? <p className="mt-3 text-sm font-semibold text-ink/70">Review and confirm the exact payment in OKX Wallet. PortPay will not sign or submit it for you.</p> : null}
+              {payStage === 'observing' || payStage === 'confirming' ? <p className="mt-3 text-sm font-semibold text-ink/70">Transaction submitted; waiting for exact transaction observation and canonical settlement confirmation.</p> : null}
+              {payStage === 'unresolved' ? <p className="mt-3 text-sm font-semibold text-amber-900">Payment status unresolved. This invoice cannot be retried. Check the buyer wallet before the merchant creates a new invoice.</p> : null}
+              {payStage === 'cancelled' ? <p className="mt-3 text-sm font-semibold text-rose-800">Payment cancelled or failed. This invoice cannot be retried after its Mainnet handoff; ask the merchant for a new invoice.</p> : null}
+              {transactionHash ? <p className="mt-3 text-xs text-ink/65">Settlement transaction: <a className="font-mono font-semibold underline" href={explorerUrl} target="_blank" rel="noreferrer">{transactionHash}</a></p> : null}
+              {payError ? <p className="mt-3 text-sm text-rose-700">{payError}</p> : null}
+              {transactionHash && submissionRecovery && payStage === 'error' ? (
+                <button type="button" className="mt-3 rounded-lg border border-ink/15 px-3 py-2 text-sm font-semibold text-ink disabled:opacity-50" onClick={() => void observeSameMainnetTransaction(submissionRecovery, true)} disabled={isPaying || isWalletPromptOpen}>
+                  Retry the same transaction check
+                </button>
+              ) : null}
             </div>
           ) : null}
-          <button type="button" className="mt-3 text-sm font-semibold text-ink/60 underline underline-offset-4 disabled:opacity-50" onClick={() => void refreshPreparation()} disabled={isPreparing || isConfirmingApproval || isWalletPromptOpen}>
+          {preflight?.status !== 'READY' && !preflight?.existingPayment && !transactionHash && payStage !== 'unresolved' && payStage !== 'cancelled' ? <button type="button" className="mt-3 text-sm font-semibold text-ink/60 underline underline-offset-4 disabled:opacity-50" onClick={() => void refreshPreparation()} disabled={isPreparing || isPaying || isWalletPromptOpen}>
             {preflight ? 'Refresh mainnet preparation' : 'Retry mainnet preparation'}
-          </button>
+          </button> : null}
         </div>
       )}
       {connectError ? <p className="mt-3 text-sm text-rose-700">{connectError.message}</p> : null}
-      <p className="mt-4 text-xs leading-5 text-ink/45">X Layer Mainnet · wNVDAx · chain 196. Final swap execution is disabled.</p>
+      <p className="mt-4 text-xs leading-5 text-ink/45">X Layer Mainnet · wNVDAx · chain 196. Pay uses the existing exact allowance and requires manual wallet confirmation; the invoice is paid only after canonical reconciliation.</p>
     </section>
   );
 }
@@ -1482,12 +1634,12 @@ function BuyerCheckoutPage({ invoiceId, paymentNetwork, onBack, onOpenBuyerInvoi
                 {invoice.status === 'paid'
                   ? 'This receipt is rendered from the persisted payment evidence for the network shown below.'
                   : isMainnet
-                    ? 'The exact wNVDAx approval can be prepared and, where authorized, manually confirmed. Buyer-signed swap execution is disabled; this invoice cannot be completed from checkout yet.'
+                  ? 'Buyer-signed Mainnet Pay is available with explicit OKX Wallet confirmation. PortPay never signs or broadcasts; the invoice becomes paid only after canonical settlement evidence is verified.'
                     : 'This historical testnet invoice is available only through internal development tooling.'}
               </p>
             </div>
 
-            {invoice.status === 'pending' && isMainnet ? <MainnetApprovalPanel invoice={invoice} /> : null}
+            {invoice.status === 'pending' && isMainnet ? <MainnetApprovalPanel invoice={invoice} onPaid={setInvoice} /> : null}
             {invoice.status === 'pending' && !isMainnet && import.meta.env.DEV && import.meta.env.VITE_ENABLE_INTERNAL_TESTNET === 'true'
               ? <BuyerWalletPanel invoice={invoice} onPaid={setInvoice} /> : null}
 
@@ -1518,7 +1670,7 @@ function BuyerCheckoutPage({ invoiceId, paymentNetwork, onBack, onOpenBuyerInvoi
                 <dd className="max-w-[16rem] break-all text-right font-mono text-xs">{invoice.id}</dd>
               </div>
             </dl>
-            <p className="mt-6 text-center text-xs leading-5 text-ink/40">{isMainnet ? 'Mainnet exact-approval preparation only · final swap remains disabled.' : 'Legacy internal testnet record.'}</p>
+            <p className="mt-6 text-center text-xs leading-5 text-ink/40">{isMainnet ? 'Mainnet payment · buyer-confirmed and server-verified.' : 'Legacy internal testnet record.'}</p>
                 </>
               );
             })()}
@@ -1596,7 +1748,7 @@ function MerchantInvoicePage({ invoiceId, onBack }: { invoiceId: string; onBack:
                 <h1 className="mt-2 text-3xl font-semibold tracking-tight sm:text-4xl">{invoice.title}</h1>
                 <p className="mt-2 text-sm text-ink/55">Track the request, share the hosted payment link, and verify the final receipt.</p>
               </div>
-              <InvoiceStatusPill status={invoice.status} />
+              <InvoiceStatusPill status={invoice.status} label={invoice.status === 'pending' && invoice.mainnetAttemptStatus === 'unresolved' ? 'Unresolved' : undefined} />
             </div>
 
             <div className="mt-6 grid gap-4 sm:grid-cols-2">
@@ -1612,11 +1764,15 @@ function MerchantInvoicePage({ invoiceId, onBack }: { invoiceId: string; onBack:
             </div>
 
             <div className={`mt-5 rounded-2xl p-5 ${invoice.status === 'paid' ? 'border border-emerald-200 bg-emerald-50' : 'border border-ink/10 bg-cloud'}`}>
-              <p className="text-sm font-semibold">{invoice.status === 'paid' ? 'Payment received' : 'Waiting for payment'}</p>
-              <p className="mt-2 text-sm leading-6 text-ink/55">
-                {invoice.status === 'paid'
-                  ? 'The merchant receipt below uses the persisted, confirmed PortPay settlement evidence.'
-                  : 'Share the payment link with your customer. Buyer wallet controls and Smart Spend stay on the separate hosted checkout.'}
+               <p className="text-sm font-semibold">{invoice.status === 'paid' ? 'Payment received' : invoice.mainnetAttemptStatus === 'unresolved' ? 'Payment status unresolved' : invoice.mainnetAttemptStatus === 'submitted' ? 'Payment submitted, awaiting verification' : 'Waiting for payment'}</p>
+               <p className="mt-2 text-sm leading-6 text-ink/55">
+                 {invoice.status === 'paid'
+                   ? 'The merchant receipt below uses the persisted, confirmed PortPay settlement evidence.'
+                   : invoice.mainnetAttemptStatus === 'unresolved'
+                     ? 'This invoice was not successfully completed. Its one Mainnet payment attempt cannot be retried. Check with the buyer for any wallet transaction; create a new invoice for another attempt.'
+                     : invoice.mainnetAttemptStatus === 'submitted'
+                       ? 'This invoice is not yet paid. The original transaction is awaiting canonical verification; do not request another payment on this invoice.'
+                       : 'Share the payment link with your customer. Buyer wallet controls and Smart Spend stay on the separate hosted checkout.'}
               </p>
             </div>
 
@@ -1763,7 +1919,7 @@ function AppShell({ children }: { children: React.ReactNode }) {
 
         <footer className="flex flex-col gap-2 border-t border-ink/10 py-6 text-xs leading-5 text-ink/45 sm:flex-row sm:items-center sm:justify-between">
           <span>PortPay · customers spend portfolios, merchants receive stablecoins</span>
-          <span>Mainnet swap execution remains disabled pending final security review and authorization.</span>
+          <span>Mainnet Pay requires explicit buyer wallet confirmation; the backend never signs or broadcasts.</span>
         </footer>
       </div>
     </main>
@@ -1806,7 +1962,7 @@ function DocumentationPage({ slug }: { slug: 'index' | 'getting-started' | 'how-
             ))}
           </nav>
           <div className="mt-5 rounded-2xl border border-mint/40 bg-mint/25 p-4 text-xs leading-5 text-ink/65">
-            X Layer Mainnet is the product network. Buyer-signed swap execution remains disabled pending final review and authorization.
+            X Layer Mainnet is the product network. Buyer-signed Pay is implemented; the buyer confirms in OKX Wallet, and PortPay verifies before marking an invoice paid.
           </div>
         </aside>
 
@@ -1834,7 +1990,7 @@ function DocumentationPage({ slug }: { slug: 'index' | 'getting-started' | 'how-
                       <div key={step} className="rounded-xl bg-cloud p-4"><span className="font-mono text-xs text-ink/40">0{index + 1}</span><p className="mt-2 font-semibold text-ink">{step}</p></div>
                     ))}
                   </div>
-                  <p>Mainnet checkout is currently limited to preparation and the separately authorized exact approval. Buyer-signed swap execution is disabled pending final review and explicit authorization.</p>
+                  <p>Mainnet checkout uses the persisted, server-validated preparation. The buyer manually confirms the transaction in OKX Wallet; PortPay never signs or broadcasts, and paid status follows canonical verification.</p>
                 </DocsSection>
               </>
             ) : null}
@@ -1847,12 +2003,12 @@ function DocumentationPage({ slug }: { slug: 'index' | 'getting-started' | 'how-
                     'PortPay generates a unique hosted payment link.',
                     'Buyer opens checkout and connects OKX Wallet on X Layer Mainnet.',
                     'Buyer reviews supported wNVDAx/wAAPLx details and any allowed exact approval.',
-                    'PortPay prepares a direct-to-merchant OKX DEX route; final swap execution is currently disabled.',
-                    'After authorization, merchant settlement will be reconciled from canonical mainnet evidence.',
+                    'PortPay prepares a direct-to-merchant OKX DEX route; the buyer reviews and manually confirms it in OKX Wallet.',
+                    'PortPay reconciles canonical mainnet evidence before the merchant invoice becomes paid.',
                     'Buyer and merchant receive role-specific receipts from the same persisted settlement evidence.',
                   ].map((step, index) => <li key={step} className="flex gap-3"><span className="grid h-6 w-6 shrink-0 place-items-center rounded-full bg-ink text-xs font-bold text-mint">{index + 1}</span><span>{step}</span></li>)}
                 </ol>
-                <p><strong className="text-ink">Current product configuration:</strong> X Layer Mainnet, supported wNVDAx/wAAPLx, real USD₮0, separate mainnet Builder Code, and the isolated `OKXDEXMainnetAdapter`. Mainnet swap writes are disabled pending final Sol High review and explicit authorization.</p>
+                <p><strong className="text-ink">Current product configuration:</strong> X Layer Mainnet, supported wNVDAx/wAAPLx, real USD₮0, separate mainnet Builder Code, and the isolated `OKXDEXMainnetAdapter`. Buyer-signed Pay is implemented; every payment requires explicit wallet confirmation, while the backend remains read-only and never signs or broadcasts.</p>
               </DocsSection>
             ) : null}
 
@@ -1864,11 +2020,11 @@ function DocumentationPage({ slug }: { slug: 'index' | 'getting-started' | 'how-
                     <li>2. Open `/merchant`, connect the merchant OKX Wallet on X Layer Mainnet, and create an invoice denominated in real USD₮0.</li>
                     <li>3. Copy the generated `/pay/:invoiceId` link into a separate buyer tab.</li>
                     <li>4. Connect the buyer wallet, review the supported tokenized asset and any exact approval preparation.</li>
-                    <li>5. Final swap execution is disabled; do not represent a pending invoice as paid.</li>
+                    <li>5. Review and confirm Pay in OKX Wallet. Keep the invoice pending until PortPay verifies the canonical settlement receipt.</li>
                   </ol>
                 </DocsSection>
                 <DocsSection title="What you need">
-                  <p>OKX Wallet on X Layer Mainnet (chain 196), mainnet OKB for gas, supported wNVDAx/wAAPLx, and real USD₮0. The final buyer-signed swap is not enabled yet.</p>
+                  <p>OKX Wallet on X Layer Mainnet (chain 196), mainnet OKB for gas, supported wNVDAx/wAAPLx, and real USD₮0. Each payment is initiated only after the buyer manually confirms the prepared transaction in the wallet.</p>
                   <p>Apply the Supabase migrations and configure backend secrets locally. Browser code never receives the Supabase service-role key or merchant API secrets.</p>
                 </DocsSection>
               </>
@@ -1879,7 +2035,7 @@ function DocumentationPage({ slug }: { slug: 'index' | 'getting-started' | 'how-
                 <DocsSection title="Hosted checkout for existing businesses">
                   <p>Your business does not need to hold or manage xStocks. Price products normally in stablecoins, create an invoice from your backend, redirect the customer to the hosted PortPay checkout, and fulfill after verified status or webhook confirmation.</p>
                   <p>Merchants can use the dashboard for payment links, or integrate invoice creation and payment confirmation into their own website.</p>
-                  <p><strong className="text-ink">Current limitation:</strong> Mainnet buyer-signed swaps remain disabled. Checkout can prepare and request the separately authorized exact approval only; merchants must not treat approval as payment or fulfill an unpaid invoice.</p>
+                  <p><strong className="text-ink">Current limitation:</strong> Buyers must complete payment in OKX Wallet, and merchants should fulfill only after PortPay reports the verified paid status. PortPay's backend does not sign or broadcast transactions.</p>
                 </DocsSection>
                 <DocsSection title="1. Create an invoice from your server">
                   <p>Use a test API key in the `Authorization` header. Keep this request server-side; never put the key in browser code.</p>

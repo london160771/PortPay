@@ -11,6 +11,64 @@ function claim(preparationId: string, invoiceId: string, transactionHash: string
 }
 
 describe('atomic mainnet settlement repository claims', () => {
+  it('adds an atomic database uniqueness rule for handoff invoice IDs without replacing existing keys', () => {
+    const migration = readFileSync(new URL('../../supabase/migrations/20260924000000_mainnet_handoff_invoice_unique.sql', import.meta.url), 'utf8')
+      .toLowerCase().replace(/\s+/g, ' ');
+    expect(migration).toContain('begin;');
+    expect(migration).toContain('create unique index mainnet_handoffs_one_per_invoice_unique on public.mainnet_handoffs (invoice_id);');
+    expect(migration).toContain('commit;');
+    expect(migration).not.toContain('drop ');
+  });
+
+  it('fails closed when the database reports duplicate handoffs for one invoice', async () => {
+    const maybeSingle = vi.fn().mockResolvedValue({ data: null, error: { message: 'multiple rows returned' } });
+    const query = { eq: vi.fn().mockReturnThis(), maybeSingle };
+    const client = { from: vi.fn().mockReturnValue({ select: vi.fn().mockReturnValue(query) }) } as unknown as SupabaseClient;
+    const repository = new SupabaseMainnetReconciliationRepository(client);
+    await expect(repository.getHandoffForInvoice('invoice-a')).rejects.toThrow(/multiple rows returned/);
+    expect(query.eq).toHaveBeenCalledWith('invoice_id', 'invoice-a');
+    expect(maybeSingle).toHaveBeenCalledOnce();
+  });
+
+  it('allows only one concurrent Supabase handoff insert for the same invoice and retains the original', async () => {
+    const invoiceId = '00000000-0000-4000-8000-000000000001';
+    const buyer = '0xbabdfef588cf57efcc7c8857960e3ccdd9167589' as const;
+    const preparationHash = `0x${'1'.repeat(64)}` as `0x${string}`;
+    const calldataHash = `0x${'2'.repeat(64)}` as `0x${string}`;
+    let original: Record<string, unknown> | null = null;
+    const client = {
+      from(table: string) {
+        expect(table).toBe('mainnet_handoffs');
+        return {
+          insert(row: Record<string, unknown>) {
+            return { select() { return { async single() {
+              // Model the invoice_id unique index's atomic insert outcome.
+              if (original?.invoice_id === row.invoice_id) return { data: null, error: { code: '23505' } };
+              original = { ...row, handoff_started_at: '2026-09-23T00:00:10.000Z' };
+              return { data: original, error: null };
+            } }; } };
+          },
+          select() {
+            return { eq(_column: string, value: string) {
+              return { async maybeSingle() {
+                return { data: original?.invoice_id === value ? original : null, error: null };
+              } };
+            } };
+          },
+        };
+      },
+    } as unknown as SupabaseClient;
+    const repository = new SupabaseMainnetReconciliationRepository(client);
+    const attempts = await Promise.all([
+      repository.createHandoff({ preparationId: '00000000-0000-4000-8000-000000000002', invoiceId, buyer, chainId: 196, preparationHash, calldataHash }),
+      repository.createHandoff({ preparationId: '00000000-0000-4000-8000-000000000003', invoiceId, buyer, chainId: 196, preparationHash, calldataHash }),
+    ]);
+    expect(attempts.filter((handoff) => handoff !== null)).toHaveLength(1);
+    expect(await repository.getHandoffForInvoice(invoiceId)).toMatchObject({
+      id: invoiceId, preparationId: '00000000-0000-4000-8000-000000000002', invoiceId,
+    });
+  });
+
   it('declares replay-safe least-privilege table ACLs across the mainnet migration chain', () => {
     const submissionsMigration = readFileSync(new URL('../../supabase/migrations/20260923000000_mainnet_submission_tracking.sql', import.meta.url), 'utf8').toLowerCase();
     const handoffMigration = readFileSync(new URL('../../supabase/migrations/20260923000001_mainnet_atomic_handoff_finalization.sql', import.meta.url), 'utf8').toLowerCase();

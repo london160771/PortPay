@@ -1,8 +1,9 @@
 import { Attribution } from 'ox/erc8021';
-import { createPublicClient, http, type Address, type Hex } from 'viem';
+import { createPublicClient, http, verifyMessage, type Address, type Hex } from 'viem';
 import type { Invoice } from '../invoices/types.js';
 import { mainnetAddressConfig, xLayerMainnetChain } from '../config/xlayerMainnet.js';
 import { verifyMainnetBuilderCode, type MainnetBuilderCodeCheck } from './mainnetBuilderCodes.js';
+import { mainnetHandoffAuthorizationMessage } from './mainnetHandoffAuthorization.js';
 import {
   estimateBufferedGas,
   readMainnetBalances,
@@ -21,7 +22,7 @@ import {
 } from './mainnetReceipt.js';
 
 export type MainnetReadinessRecheck = {
-  status: 'READY' | 'BLOCKED' | 'EXPIRED' | 'WRONG_CHAIN' | 'WRONG_RECIPIENT'
+  status: 'READY' | 'SUBMITTED' | 'HANDOFF_UNRESOLVED' | 'BLOCKED' | 'EXPIRED' | 'WRONG_CHAIN' | 'WRONG_RECIPIENT'
     | 'INVALID_ATTRIBUTION' | 'INSUFFICIENT_BALANCE' | 'INSUFFICIENT_ALLOWANCE' | 'INSUFFICIENT_GAS';
   ready: boolean;
   reason: string;
@@ -31,12 +32,22 @@ export type MainnetReadinessRecheck = {
   snapshotBlockNumber?: string;
   handoffId?: string;
   handoffStartedAt?: string;
+  transactionHash?: Hex;
+  walletTransaction?: {
+    from: Address;
+    to: Address;
+    data: Hex;
+    value: string;
+    chainId: 196;
+  };
   checkedAt: string;
 };
 
 export type MainnetPaymentService = {
-  recheck(invoice: Invoice, preparationId: string, buyerAddress: Address): Promise<MainnetReadinessRecheck>;
+  getAttemptStatus(invoice: Invoice): Promise<'none' | 'unresolved' | 'submitted'>;
+  recheck(invoice: Invoice, preparationId: string, buyerAddress: Address, buyerSignature: Hex): Promise<MainnetReadinessRecheck>;
   recordSubmission(invoice: Invoice, preparationId: string, handoffId: string, transactionHash: Hex): Promise<{ status: 'submitted'; preparationId: string; handoffId: string; transactionHash: Hex; submittedAt: string; expiresAt: string }>;
+  recoverSubmission(invoice: Invoice, preparationId: string, buyerAddress: Address): Promise<{ status: 'submitted'; preparationId: string; handoffId: string; transactionHash: Hex; submittedAt: string; expiresAt: string } | null>;
   reconcile(invoice: Invoice, preparationId: string, transactionHash: Hex): Promise<{ verification: MainnetReceiptVerification; preparation: MainnetPreparationEvidence }>;
 };
 
@@ -48,6 +59,7 @@ export type MainnetPaymentServiceDependencies = {
   confirmationDepth?: number;
   mainnetBuilderCode?: string;
   mainnetBuilderPayoutAddress?: string;
+  verifyBuyerHandoffSignature?: (options: { buyer: Address; message: string; signature: Hex }) => Promise<boolean>;
 };
 
 function defaultPublicClient(): MainnetReadOnlyClient & MainnetReceiptClient {
@@ -91,6 +103,31 @@ function verifyConfiguredBuilderCode(
   return verify({ code: configuredCode, expectedPayoutAddress: payout });
 }
 
+function handoffMatchesPreparation(
+  handoff: NonNullable<Awaited<ReturnType<MainnetReconciliationRepository['getHandoffForInvoice']>>>,
+  invoice: Invoice,
+  evidence: MainnetPreparationEvidence,
+): boolean {
+  const handoffTime = Date.parse(handoff.handoffStartedAt);
+  return handoff.invoiceId === invoice.id && handoff.preparationId === evidence.id
+    && handoff.chainId === 196 && handoff.buyer.toLowerCase() === evidence.buyer.toLowerCase()
+    && handoff.preparationHash === evidence.preparationHash
+    && handoff.calldataHash === evidence.attributedSwapCalldataHash
+    && Number.isFinite(handoffTime) && handoffTime >= Date.parse(evidence.preparedAt)
+    && handoffTime < Date.parse(evidence.expiresAt);
+}
+
+function submissionMatchesHandoff(
+  submission: NonNullable<Awaited<ReturnType<MainnetReconciliationRepository['getSubmissionForPreparation']>>>,
+  handoff: NonNullable<Awaited<ReturnType<MainnetReconciliationRepository['getHandoffForInvoice']>>>,
+  invoice: Invoice,
+  evidence: MainnetPreparationEvidence,
+): boolean {
+  return submission.preparationId === evidence.id && submission.invoiceId === invoice.id
+    && submission.handoffId === handoff.id && submission.chainId === 196
+    && /^0x[0-9a-fA-F]{64}$/.test(submission.transactionHash);
+}
+
 export function createMainnetPaymentService(dependencies: MainnetPaymentServiceDependencies = {}): MainnetPaymentService {
   const repositoryFactory = dependencies.createRepository ?? createMainnetReconciliationRepository;
   const publicClient = dependencies.publicClient ?? defaultPublicClient();
@@ -98,9 +135,27 @@ export function createMainnetPaymentService(dependencies: MainnetPaymentServiceD
   const verifyBuilder = dependencies.verifyBuilderCode ?? verifyMainnetBuilderCode;
   const configuredBuilderCode = dependencies.mainnetBuilderCode ?? mainnetAddressConfig.builderCode;
   const configuredBuilderPayout = dependencies.mainnetBuilderPayoutAddress ?? mainnetAddressConfig.builderPayoutAddress;
+  const verifyBuyerHandoffSignature = dependencies.verifyBuyerHandoffSignature
+    ?? (({ buyer, message, signature }) => verifyMessage({ address: buyer, message, signature }));
 
   return {
-    async recheck(invoice, preparationId, buyerAddress) {
+    async getAttemptStatus(invoice) {
+      if (invoice.paymentNetwork !== 'x-layer-mainnet') return 'none';
+      const repository = repositoryFactory();
+      const handoff = await repository.getHandoffForInvoice(invoice.id);
+      if (!handoff) return 'none';
+      const evidence = await repository.getPreparation(handoff.preparationId);
+      if (!evidence || !handoffMatchesPreparation(handoff, invoice, evidence)) {
+        throw new Error('Existing Mainnet handoff does not match immutable invoice preparation.');
+      }
+      const submission = await repository.getSubmissionForPreparation(evidence.id);
+      if (!submission) return 'unresolved';
+      if (!submissionMatchesHandoff(submission, handoff, invoice, evidence)) {
+        throw new Error('Existing Mainnet submission does not match immutable invoice handoff.');
+      }
+      return 'submitted';
+    },
+    async recheck(invoice, preparationId, buyerAddress, buyerSignature) {
       const checkedAt = now().toISOString();
       const blocked = (status: MainnetReadinessRecheck['status'], reason: string, evidence?: MainnetPreparationEvidence): MainnetReadinessRecheck => ({
         status, ready: false, reason, preparationId, checkedAt,
@@ -114,6 +169,38 @@ export function createMainnetPaymentService(dependencies: MainnetPaymentServiceD
         if (!evidence) return blocked('BLOCKED', 'Persisted mainnet preparation was not found.');
         const binding = validatePersistedMainnetPreparation(evidence, invoice);
         if (evidence.buyer.toLowerCase() !== buyerAddress.toLowerCase()) return blocked('BLOCKED', 'Connected buyer does not match the persisted preparation.', evidence);
+        if (!/^0x[0-9a-fA-F]{130}$/.test(buyerSignature)
+          || !await verifyBuyerHandoffSignature({
+            buyer: evidence.buyer, message: mainnetHandoffAuthorizationMessage(evidence), signature: buyerSignature,
+          })) {
+          return blocked('BLOCKED', 'A valid buyer wallet signature for this exact invoice and preparation is required.', evidence);
+        }
+        let handoff = await repository.getHandoffForInvoice(invoice.id);
+        if (handoff && !handoffMatchesPreparation(handoff, invoice, evidence)) {
+          return blocked('BLOCKED', 'The invoice handoff belongs to a different buyer, preparation, or calldata.', evidence);
+        }
+        if (handoff) {
+          const submission = await repository.getSubmissionForPreparation(evidence.id);
+          if (submission) {
+            if (!submissionMatchesHandoff(submission, handoff, invoice, evidence)) {
+              return blocked('BLOCKED', 'Existing submission evidence does not match the invoice handoff.', evidence);
+            }
+            return {
+              status: 'SUBMITTED', ready: false,
+              reason: 'A transaction hash is already recorded for this handoff. Resume that transaction only; no second wallet prompt is available.',
+              preparationId, preparationHash: evidence.preparationHash, expiresAt: evidence.expiresAt,
+              handoffId: handoff.id, handoffStartedAt: handoff.handoffStartedAt,
+              transactionHash: submission.transactionHash, checkedAt: now().toISOString(),
+            };
+          }
+          return {
+            status: 'HANDOFF_UNRESOLVED', ready: false,
+            reason: 'Payment status unresolved. This invoice already used its one Mainnet handoff; another swap wallet prompt is prohibited.',
+            preparationId, preparationHash: evidence.preparationHash, expiresAt: evidence.expiresAt,
+            handoffId: handoff.id, handoffStartedAt: handoff.handoffStartedAt,
+            checkedAt: now().toISOString(),
+          };
+        }
         if (await publicClient.getChainId() !== 196) return blocked('WRONG_CHAIN', 'Read-only RPC is not X Layer Mainnet.', evidence);
         const currentTime = now().getTime();
         const expiresAt = Date.parse(evidence.expiresAt);
@@ -153,7 +240,7 @@ export function createMainnetPaymentService(dependencies: MainnetPaymentServiceD
         if (now().getTime() >= Date.parse(evidence.expiresAt)) {
           return blocked('EXPIRED', 'Preparation expired before the server could authorize wallet handoff.', evidence);
         }
-        const handoff = await repository.createHandoff({
+        handoff = await repository.createHandoff({
           preparationId: evidence.id,
           invoiceId: invoice.id,
           buyer: evidence.buyer,
@@ -161,13 +248,44 @@ export function createMainnetPaymentService(dependencies: MainnetPaymentServiceD
           preparationHash: evidence.preparationHash,
           calldataHash: evidence.attributedSwapCalldataHash,
         });
-        if (!handoff) return blocked('EXPIRED', 'Preparation expired before the server could authorize wallet handoff.', evidence);
+        if (!handoff) {
+          const existing = await repository.getHandoffForInvoice(invoice.id);
+          return blocked(existing ? 'HANDOFF_UNRESOLVED' : 'EXPIRED', existing
+            ? 'This invoice already has a Mainnet handoff. No second swap wallet prompt is permitted.'
+            : 'Preparation expired before the server could authorize wallet handoff.', evidence);
+        }
+        if (!handoffMatchesPreparation(handoff, invoice, evidence)) {
+          return blocked('BLOCKED', 'The existing invoice handoff does not match this exact persisted preparation.', evidence);
+        }
+        const submitted = await repository.getSubmissionForPreparation(evidence.id);
+        if (submitted) {
+          if (!submissionMatchesHandoff(submitted, handoff, invoice, evidence)) {
+            return blocked('BLOCKED', 'Existing submission evidence does not match the invoice handoff.', evidence);
+          }
+          return {
+            status: 'SUBMITTED', ready: false,
+            reason: 'A transaction hash is already recorded for this handoff. Resume that transaction only; no second wallet prompt is available.',
+            preparationId, preparationHash: evidence.preparationHash, expiresAt: evidence.expiresAt,
+            handoffId: handoff.id, handoffStartedAt: handoff.handoffStartedAt,
+            transactionHash: submitted.transactionHash, checkedAt: now().toISOString(),
+          };
+        }
         return {
           status: 'READY', ready: true,
           reason: 'The persisted preparation hash, buyer, chain, invoice, exact allowance, balances, Builder Code, exact attributed gas estimates, and exact swap simulation passed. No replacement swap was requested.',
           preparationId, preparationHash: evidence.preparationHash, expiresAt: evidence.expiresAt,
           snapshotBlockNumber: balances.snapshotBlockNumber, handoffId: handoff.id,
-          handoffStartedAt: handoff.handoffStartedAt, checkedAt: now().toISOString(),
+          handoffStartedAt: handoff.handoffStartedAt,
+          // These fields are copied from immutable persisted evidence after the handoff claim.
+          // This response is the only wallet transaction source; no new OKX response is fetched.
+          walletTransaction: {
+            from: evidence.swap.from,
+            to: evidence.swap.to,
+            data: evidence.attributedSwapCalldata,
+            value: evidence.swap.value.toString(),
+            chainId: 196,
+          },
+          checkedAt: now().toISOString(),
         };
       } catch (error) {
         return blocked('BLOCKED', errorMessage(error));
@@ -203,6 +321,38 @@ export function createMainnetPaymentService(dependencies: MainnetPaymentServiceD
       const recorded = await repository.recordSubmission({ preparationId, handoffId, invoiceId: invoice.id, chainId: 196, transactionHash });
       if (!recorded) throw new Error('A different transaction or preparation is already recorded for this invoice.');
       return { status: 'submitted', preparationId, handoffId, transactionHash, submittedAt: recorded.submittedAt, expiresAt: evidence.expiresAt };
+    },
+
+    async recoverSubmission(invoice, preparationId, buyerAddress) {
+      if (invoice.paymentNetwork !== 'x-layer-mainnet' || invoice.status !== 'pending') {
+        throw new Error('Submission recovery requires a pending Mainnet invoice.');
+      }
+      const repository = repositoryFactory();
+      const evidence = await repository.getPreparation(preparationId);
+      if (!evidence) throw new Error('Persisted mainnet preparation was not found.');
+      validatePersistedMainnetPreparation(evidence, invoice);
+      if (evidence.buyer.toLowerCase() !== buyerAddress.toLowerCase()) {
+        throw new Error('Submission recovery buyer does not match the persisted preparation.');
+      }
+      const submission = await repository.getSubmissionForPreparation(preparationId);
+      if (!submission) return null;
+      const handoff = await repository.getHandoff(submission.handoffId);
+      if (!handoff || submission.preparationId !== evidence.id || submission.invoiceId !== invoice.id
+        || submission.chainId !== 196 || !/^0x[0-9a-fA-F]{64}$/.test(submission.transactionHash)
+        || handoff.id !== submission.handoffId || handoff.preparationId !== evidence.id
+        || handoff.invoiceId !== invoice.id || handoff.chainId !== 196
+        || handoff.buyer.toLowerCase() !== evidence.buyer.toLowerCase()
+        || handoff.preparationHash !== evidence.preparationHash
+        || handoff.calldataHash !== evidence.attributedSwapCalldataHash
+        || Date.parse(submission.submittedAt) < Date.parse(handoff.handoffStartedAt)
+        || Date.parse(handoff.handoffStartedAt) < Date.parse(evidence.preparedAt)
+        || Date.parse(handoff.handoffStartedAt) >= Date.parse(evidence.expiresAt)) {
+        throw new Error('Persisted submission does not match its immutable preparation and handoff.');
+      }
+      return {
+        status: 'submitted', preparationId, handoffId: handoff.id,
+        transactionHash: submission.transactionHash, submittedAt: submission.submittedAt, expiresAt: evidence.expiresAt,
+      };
     },
 
     async reconcile(invoice, preparationId, transactionHash) {

@@ -9,6 +9,7 @@ import {
   type PreparedMainnetTransaction,
 } from './mainnet.js';
 import { toMainnetBuilderCodeDataSuffix } from './builderCodes.js';
+import { mainnetHandoffAuthorizationMessage } from './mainnetHandoffAuthorization.js';
 import {
   createMainnetReconciliationRepository,
   type MainnetPreparationEvidence,
@@ -48,12 +49,19 @@ export type MainnetApprovalPreparation = {
   expiresAt: string;
   preparationBlockNumber: string;
   snapshotAllowance: string;
+  handoffMessage?: string;
 };
 
 export type MainnetApprovalPreparationResult = {
-  status: MainnetPreflightResult['status'];
+  status: MainnetPreflightResult['status'] | 'HANDOFF_UNRESOLVED' | 'SUBMITTED';
   reason: string;
   preparation?: MainnetApprovalPreparation;
+  existingPayment?: {
+    preparationId: string;
+    handoffId: string;
+    buyer: Address;
+    transactionHash?: Hex;
+  };
 };
 
 export type MainnetApprovalPreparationService = (
@@ -67,6 +75,48 @@ export type MainnetApprovalPreparationDependencies = {
   preflight?: typeof runMainnetPreflight;
   now?: () => Date;
 };
+
+function approvalPreparationFromEvidence(
+  evidence: MainnetPreparationEvidence,
+  snapshotAllowance: string,
+  handoffMessage?: string,
+): MainnetApprovalPreparation {
+  return {
+    preparationId: evidence.id,
+    preparationHash: evidence.preparationHash,
+    invoiceId: evidence.invoiceId,
+    buyer: evidence.buyer,
+    merchant: evidence.merchant,
+    chainId: 196,
+    token: evidence.inputToken,
+    outputToken: evidence.outputToken,
+    spender: evidence.spender,
+    amount: evidence.exactInputAmount,
+    minimumReceive: evidence.minimumReceive,
+    nativeValue: '0',
+    approvalCalldata: evidence.approval.data,
+    attributedApprovalCalldata: evidence.attributedApprovalCalldata,
+    dataSuffix: evidence.approval.dataSuffix!,
+    builderCode: evidence.builderCode,
+    expiresAt: evidence.expiresAt,
+    preparationBlockNumber: evidence.preparationBlockNumber,
+    snapshotAllowance,
+    ...(handoffMessage ? { handoffMessage } : {}),
+  };
+}
+
+function handoffMatchesPreparation(handoff: {
+  id: string; invoiceId: string; preparationId: string; buyer: Address; chainId: number;
+  preparationHash: Hex; calldataHash: Hex; handoffStartedAt: string;
+}, invoice: Invoice, evidence: MainnetPreparationEvidence): boolean {
+  const startedAt = Date.parse(handoff.handoffStartedAt);
+  return handoff.invoiceId === invoice.id && handoff.preparationId === evidence.id
+    && handoff.chainId === 196 && handoff.buyer.toLowerCase() === evidence.buyer.toLowerCase()
+    && handoff.preparationHash === evidence.preparationHash
+    && handoff.calldataHash === evidence.attributedSwapCalldataHash
+    && Number.isFinite(startedAt) && startedAt >= Date.parse(evidence.preparedAt)
+    && startedAt < Date.parse(evidence.expiresAt);
+}
 
 function isExactApproval(evidence: MainnetPreparationEvidence, invoice: Invoice, buyer: Address, expectedBuilderCode: string | undefined): boolean {
   const approval = evidence.approval;
@@ -110,8 +160,37 @@ export function createMainnetApprovalPreparationService(dependencies: MainnetApp
   const now = dependencies.now ?? (() => new Date());
 
   return async (invoice, buyerAddress) => {
-    const adapter = createAdapter();
     const repository = createRepository();
+    const handoff = await repository.getHandoffForInvoice(invoice.id);
+    if (handoff) {
+      const evidence = await repository.getPreparation(handoff.preparationId);
+      if (!evidence || evidence.invoiceId !== invoice.id || evidence.chainId !== 196
+        || evidence.buyer.toLowerCase() !== buyerAddress.toLowerCase()
+        || !handoffMatchesPreparation(handoff, invoice, evidence)) {
+        return { status: 'BLOCKED', reason: 'An existing Mainnet payment handoff cannot be safely recovered for this buyer and invoice.' };
+      }
+      const submission = await repository.getSubmissionForPreparation(evidence.id);
+      if (submission && (submission.invoiceId !== invoice.id || submission.handoffId !== handoff.id
+        || submission.chainId !== 196 || !/^0x[0-9a-fA-F]{64}$/.test(submission.transactionHash))) {
+        return { status: 'BLOCKED', reason: 'Existing Mainnet submission evidence does not match the invoice handoff.' };
+      }
+      if (!submission) {
+        return {
+          status: 'HANDOFF_UNRESOLVED',
+          reason: 'Payment status unresolved. This invoice already has its one Mainnet handoff and cannot be retried. Ask the merchant for a new invoice if payment did not complete.',
+          existingPayment: { preparationId: evidence.id, handoffId: handoff.id, buyer: evidence.buyer },
+        };
+      }
+      return {
+        status: 'SUBMITTED',
+        reason: 'An existing Mainnet transaction is awaiting canonical reconciliation. Resume that transaction only.',
+        existingPayment: {
+          preparationId: evidence.id, handoffId: handoff.id, buyer: evidence.buyer,
+          transactionHash: submission.transactionHash,
+        },
+      };
+    }
+    const adapter = createAdapter();
     const quote: MainnetQuote = await adapter.getQuote({
       assetAmount: MAINNET_APPROVAL_PROOF_INPUT,
       assetKey: 'wNvda',
@@ -129,20 +208,34 @@ export function createMainnetApprovalPreparationService(dependencies: MainnetApp
       expectedBuilderPayoutAddress: mainnetAddressConfig.builderPayoutAddress,
     });
 
-    if (result.status !== 'APPROVAL_REQUIRED'
-      || result.simulations?.stage !== 'approval'
-      || result.simulations.approval !== 'passed'
-      || result.simulations.swap !== 'not-run'
+    const allowanceIsExact = result.balances
+      && BigInt(result.balances.allowance) === BigInt(MAINNET_APPROVAL_PROOF_INPUT);
+    const approvalRequired = result.status === 'APPROVAL_REQUIRED' && !result.ready
+      && result.simulations?.stage === 'approval'
+      && result.simulations.approval === 'passed'
+      && result.simulations.swap === 'not-run'
+      && !allowanceIsExact;
+    const ready = result.status === 'READY' && result.ready
+      && result.simulations?.stage === 'swap'
+      && result.simulations.approval === 'not-run'
+      && result.simulations.swap === 'passed'
+      && allowanceIsExact;
+
+    if ((!approvalRequired && !ready)
       || result.builderCode.status !== 'VERIFIED'
+      || result.builderCode.chainId !== 196
+      || result.builderCode.code !== adapter.getBuilderCode()
+      || !result.builderCode.payoutAddress
       || !result.preparationId
       || !result.balances
-      || BigInt(result.balances.allowance) === BigInt(MAINNET_APPROVAL_PROOF_INPUT)
       || result.balances.assetDecimals !== 18
       || result.balances.stablecoinDecimals !== 6
       || result.balances.assetAddress.toLowerCase() !== mainnetSupportedAssets.find((asset) => asset.key === 'wNvda')?.address.toLowerCase()
       || result.balances.stablecoinAddress.toLowerCase() !== mainnetAddressConfig.usdt0.toLowerCase()
       || result.balances.buyerAddress.toLowerCase() !== buyerAddress.toLowerCase()) {
-      return { status: result.status, reason: result.reason };
+      return result.status === 'READY'
+        ? { status: 'BLOCKED', reason: 'READY did not match the exact persisted preparation, buyer, balances, simulations, or Builder Code evidence.' }
+        : { status: result.status, reason: result.reason };
     }
 
     const evidence = await repository.getPreparation(result.preparationId);
@@ -151,7 +244,9 @@ export function createMainnetApprovalPreparationService(dependencies: MainnetApp
       || evidence.preparationBlockNumber !== result.balances.snapshotBlockNumber
       || evidence.preparationBlockHash !== result.balances.snapshotBlockHash
       || evidence.spender.toLowerCase() !== result.balances.approvalSpender.toLowerCase()
-      || result.balances.allowance === evidence.exactInputAmount
+      || (ready && BigInt(result.balances.allowance) !== BigInt(evidence.exactInputAmount))
+      || (!ready && BigInt(result.balances.allowance) === BigInt(evidence.exactInputAmount))
+      || result.builderCode.payoutAddress.toLowerCase() !== evidence.builderPayout.toLowerCase()
       || !isExactApproval(evidence, invoice, buyerAddress, adapter.getBuilderCode())) {
       return { status: 'BLOCKED', reason: 'The persisted mainnet approval preparation is missing, stale, or does not match the invoice and buyer.' };
     }
@@ -159,27 +254,10 @@ export function createMainnetApprovalPreparationService(dependencies: MainnetApp
     return {
       status: result.status,
       reason: result.reason,
-      preparation: {
-        preparationId: evidence.id,
-        preparationHash: evidence.preparationHash,
-        invoiceId: evidence.invoiceId,
-        buyer: evidence.buyer,
-        merchant: evidence.merchant,
-        chainId: 196,
-        token: evidence.inputToken,
-        outputToken: evidence.outputToken,
-        spender: evidence.spender,
-        amount: evidence.exactInputAmount,
-        minimumReceive: evidence.minimumReceive,
-        nativeValue: '0',
-        approvalCalldata: evidence.approval.data,
-        attributedApprovalCalldata: evidence.attributedApprovalCalldata,
-        dataSuffix: evidence.approval.dataSuffix!,
-        builderCode: evidence.builderCode,
-        expiresAt: evidence.expiresAt,
-        preparationBlockNumber: evidence.preparationBlockNumber,
-        snapshotAllowance: result.balances.allowance,
-      },
+      preparation: approvalPreparationFromEvidence(
+        evidence, result.balances.allowance,
+        ready ? mainnetHandoffAuthorizationMessage(evidence) : undefined,
+      ),
     };
   };
 }

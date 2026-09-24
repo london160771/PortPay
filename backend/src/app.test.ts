@@ -40,6 +40,7 @@ describe('backend routes', () => {
     expect(paths).toContain('/api/invoices/:invoiceId/mainnet/approval-preparation');
     expect(paths).toContain('/api/invoices/:invoiceId/mainnet/readiness-recheck');
     expect(paths).toContain('/api/invoices/:invoiceId/mainnet/submitted');
+    expect(paths).toContain('/api/invoices/:invoiceId/mainnet/submission-recovery');
     expect(paths).toContain('/api/invoices/:invoiceId/mainnet/reconcile');
     expect(paths).toContain('/api/invoices/:invoiceId/reconcile');
     expect(paths).toContain('/api/history/merchant');
@@ -97,6 +98,56 @@ describe('backend routes', () => {
     expect(requestedBuyer.toLowerCase()).toBe('0xbabdfef588cf57efcc7c8857960e3ccdd9167589');
   });
 
+  it('recovers only the server-recorded submission for the supplied invoice, preparation, and buyer', async () => {
+    const repository = new InMemoryInvoiceRepository();
+    await repository.create(invoice);
+    const calls: unknown[][] = [];
+    const submission = {
+      status: 'submitted' as const, preparationId: '00000000-0000-4000-8000-000000000002',
+      handoffId: '00000000-0000-4000-8000-000000000003', transactionHash: `0x${'a'.repeat(64)}` as `0x${string}`,
+      submittedAt: '2026-09-23T00:00:10.000Z', expiresAt: '2026-09-23T00:01:00.000Z',
+    };
+    const app = createApp(repository, undefined, {
+      mainnetPayment: {
+        async getAttemptStatus() { return 'none' as const; },
+        async recheck() { throw new Error('not expected'); },
+        async recordSubmission() { throw new Error('not expected'); },
+        async recoverSubmission(...args: unknown[]) { calls.push(args); return submission; },
+        async reconcile() { throw new Error('not expected'); },
+      },
+    });
+    await withServer(app, async (baseUrl) => {
+      const response = await fetch(`${baseUrl}/api/invoices/${invoice.id}/mainnet/submission-recovery`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ preparationId: submission.preparationId, buyerAddress: '0xbabdfef588cf57efcc7c8857960e3ccdd9167589', transactionHash: `0x${'f'.repeat(64)}` }),
+      });
+      expect(response.status).toBe(200);
+      expect(await response.json()).toEqual({ submission });
+    });
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.slice(1)).toEqual([submission.preparationId, '0xbabdfef588cf57efcc7c8857960e3ccdd9167589']);
+  });
+
+  it('shows an unresolved one-shot Mainnet handoff to the merchant without marking the invoice paid', async () => {
+    const repository = new InMemoryInvoiceRepository();
+    await repository.create(invoice);
+    const app = createApp(repository, undefined, {
+      mainnetPayment: {
+        async getAttemptStatus() { return 'unresolved' as const; },
+        async recheck() { throw new Error('not expected'); },
+        async recordSubmission() { throw new Error('not expected'); },
+        async recoverSubmission() { return null; },
+        async reconcile() { throw new Error('not expected'); },
+      },
+    });
+    await withServer(app, async (baseUrl) => {
+      const response = await fetch(`${baseUrl}/api/invoices/${invoice.id}`);
+      expect(response.status).toBe(200);
+      expect((await response.json()).invoice).toMatchObject({ status: 'pending', mainnetAttemptStatus: 'unresolved' });
+    });
+    expect(await repository.findById(invoice.id)).toMatchObject({ status: 'pending' });
+  });
+
   it('rejects mainnet preparation for missing or non-pending invoices before calling the service', async () => {
     const repository = new InMemoryInvoiceRepository();
     const alreadyPaid = { ...invoice, id: '00000000-0000-4000-8000-000000000002', status: 'paid' as const };
@@ -125,8 +176,10 @@ describe('backend routes', () => {
     const calls: unknown[][] = [];
     const txHash = `0x${'a'.repeat(64)}`;
     const mainnetPayment = {
+      async getAttemptStatus() { return 'none' as const; },
       async recheck(...args: unknown[]) { calls.push(['recheck', ...args]); return { status: 'READY' as const, ready: true, reason: 'all gates passed', preparationId: '00000000-0000-4000-8000-000000000002', handoffId: '00000000-0000-4000-8000-000000000003', checkedAt: new Date().toISOString() }; },
       async recordSubmission(...args: unknown[]) { calls.push(['submitted', ...args]); return { status: 'submitted' as const, preparationId: '00000000-0000-4000-8000-000000000002', handoffId: '00000000-0000-4000-8000-000000000003', transactionHash: txHash as `0x${string}`, submittedAt: new Date().toISOString(), expiresAt: new Date(Date.now() + 30_000).toISOString() }; },
+      async recoverSubmission() { return null; },
       async reconcile(...args: unknown[]) {
         calls.push(['reconcile', ...args]);
         const retry = (args[0] as Invoice).status === 'paid';
@@ -153,9 +206,14 @@ describe('backend routes', () => {
     const app = createApp(repository, undefined, { mainnetPayment });
     const preparationId = '00000000-0000-4000-8000-000000000002';
     await withServer(app, async (baseUrl) => {
+      const unsigned = await fetch(`${baseUrl}/api/invoices/${invoice.id}/mainnet/readiness-recheck`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ preparationId, buyerAddress: '0xbabdfef588cf57efcc7c8857960e3ccdd9167589' }),
+      });
+      expect(unsigned.status).toBe(400);
       const recheck = await fetch(`${baseUrl}/api/invoices/${invoice.id}/mainnet/readiness-recheck`, {
         method: 'POST', headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ preparationId, buyerAddress: '0xbabdfef588cf57efcc7c8857960e3ccdd9167589', router: '0x1111111111111111111111111111111111111111' }),
+        body: JSON.stringify({ preparationId, buyerAddress: '0xbabdfef588cf57efcc7c8857960e3ccdd9167589', buyerSignature: `0x${'a'.repeat(130)}`, router: '0x1111111111111111111111111111111111111111' }),
       });
       expect(recheck.status).toBe(200);
       const submitted = await fetch(`${baseUrl}/api/invoices/${invoice.id}/mainnet/submitted`, {
@@ -192,8 +250,10 @@ describe('backend routes', () => {
     const repository = new InMemoryInvoiceRepository();
     await repository.create(invoice);
     const mainnetPayment = {
+      async getAttemptStatus() { return 'none' as const; },
       async recheck() { return { status: 'BLOCKED' as const, ready: false, reason: 'not relevant', preparationId: '00000000-0000-4000-8000-000000000002', checkedAt: new Date().toISOString() }; },
       async recordSubmission() { throw new Error('not relevant'); },
+      async recoverSubmission() { return null; },
       async reconcile() { throw new MainnetReceiptVerificationError('FAILED_TRANSACTION', 'The mainnet transaction reverted.'); },
     };
     const app = createApp(repository, undefined, { mainnetPayment });
@@ -214,8 +274,10 @@ describe('backend routes', () => {
     let calls = 0;
     const app = createApp(repository, undefined, {
       mainnetPayment: {
+        async getAttemptStatus() { return 'none' as const; },
         async recheck() { throw new Error('not expected'); },
         async recordSubmission() { throw new Error('not expected'); },
+        async recoverSubmission() { return null; },
         async reconcile() { calls += 1; throw new Error('not expected'); },
       },
     });

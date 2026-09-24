@@ -199,8 +199,10 @@ describe('mainnet receipt/reconciliation verification', () => {
       getPreparation: async () => ({ ...value.evidence, swap: { ...value.evidence.swap, builderCode: 'othercode1234567' } }),
       savePreparation: value.repository.savePreparation.bind(value.repository),
       createHandoff: value.repository.createHandoff.bind(value.repository), getHandoff: value.repository.getHandoff.bind(value.repository),
+      getHandoffForInvoice: value.repository.getHandoffForInvoice.bind(value.repository),
       recordSubmission: value.repository.recordSubmission.bind(value.repository),
       getSubmission: value.repository.getSubmission.bind(value.repository),
+      getSubmissionForPreparation: value.repository.getSubmissionForPreparation.bind(value.repository),
       claimSettlement: value.repository.claimSettlement.bind(value.repository),
     };
     await expect(verifyMainnetReceipt({ ...value.common, repository: corruptedRepository, publicClient: receiptClient(value.logs) })).rejects.toMatchObject({ code: 'INVALID_PREPARATION' });
@@ -226,8 +228,10 @@ describe('mainnet receipt/reconciliation verification', () => {
       getPreparation: async () => tamperedResponse,
       savePreparation: value.repository.savePreparation.bind(value.repository),
       createHandoff: value.repository.createHandoff.bind(value.repository), getHandoff: value.repository.getHandoff.bind(value.repository),
+      getHandoffForInvoice: value.repository.getHandoffForInvoice.bind(value.repository),
       recordSubmission: value.repository.recordSubmission.bind(value.repository),
       getSubmission: value.repository.getSubmission.bind(value.repository),
+      getSubmissionForPreparation: value.repository.getSubmissionForPreparation.bind(value.repository),
       claimSettlement: value.repository.claimSettlement.bind(value.repository),
     };
     await expect(verifyMainnetReceipt({ ...value.common, repository: tamperedRepository, publicClient: receiptClient(value.logs) })).rejects.toMatchObject({ code: 'INVALID_PREPARATION' });
@@ -240,8 +244,10 @@ describe('mainnet receipt/reconciliation verification', () => {
       getPreparation: async () => tamperedApprovalBinding,
       savePreparation: value.repository.savePreparation.bind(value.repository),
       createHandoff: value.repository.createHandoff.bind(value.repository), getHandoff: value.repository.getHandoff.bind(value.repository),
+      getHandoffForInvoice: value.repository.getHandoffForInvoice.bind(value.repository),
       recordSubmission: value.repository.recordSubmission.bind(value.repository),
       getSubmission: value.repository.getSubmission.bind(value.repository),
+      getSubmissionForPreparation: value.repository.getSubmissionForPreparation.bind(value.repository),
       claimSettlement: value.repository.claimSettlement.bind(value.repository),
     };
     await expect(verifyMainnetReceipt({ ...value.common, repository: approvalRepository, publicClient: receiptClient(value.logs) })).rejects.toMatchObject({ code: 'INVALID_PREPARATION' });

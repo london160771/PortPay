@@ -9,6 +9,7 @@ export type Invoice = {
   paymentUrl: string;
   status: InvoiceStatus;
   paymentNetwork?: PaymentNetwork;
+  mainnetAttemptStatus?: 'none' | 'unresolved' | 'submitted';
   createdAt: string;
   updatedAt: string;
   paymentTxHash?: string;
@@ -71,12 +72,58 @@ export type MainnetApprovalPreparation = {
   expiresAt: string;
   preparationBlockNumber: string;
   snapshotAllowance: string;
+  handoffMessage?: string;
 };
 
 export type MainnetApprovalPreparationResponse = {
   status: string;
   reason: string;
   preparation?: MainnetApprovalPreparation;
+  existingPayment?: {
+    preparationId: string;
+    handoffId: string;
+    buyer: `0x${string}`;
+    transactionHash?: `0x${string}`;
+  };
+};
+
+export type MainnetReadinessRecheckResponse = {
+  status: string;
+  ready: boolean;
+  reason: string;
+  preparationId: string;
+  preparationHash?: `0x${string}`;
+  expiresAt?: string;
+  handoffId?: string;
+  handoffStartedAt?: string;
+  transactionHash?: `0x${string}`;
+  checkedAt: string;
+  walletTransaction?: {
+    from: `0x${string}`;
+    to: `0x${string}`;
+    data: `0x${string}`;
+    value: string;
+    chainId: 196;
+  };
+};
+
+export type MainnetSubmissionResponse = {
+  status: 'submitted';
+  preparationId: string;
+  handoffId: string;
+  transactionHash: `0x${string}`;
+  submittedAt: string;
+  expiresAt: string;
+};
+
+export type MainnetSubmissionRecoveryResponse = {
+  submission: MainnetSubmissionResponse | null;
+};
+
+export type MainnetReconciliationResponse = {
+  invoice?: Invoice;
+  code?: string;
+  error?: string;
 };
 
 export class ApiError extends Error {
@@ -169,6 +216,52 @@ export function prepareMainnetApproval(
   return request<MainnetApprovalPreparationResponse>(`/api/invoices/${encodeURIComponent(invoiceId)}/mainnet/approval-preparation`, {
     method: 'POST',
     body: JSON.stringify({ buyerAddress }),
+  });
+}
+
+export function recheckMainnetReadiness(
+  invoiceId: string,
+  preparationId: string,
+  buyerAddress: string,
+  buyerSignature: string,
+): Promise<MainnetReadinessRecheckResponse> {
+  return request<MainnetReadinessRecheckResponse>(`/api/invoices/${encodeURIComponent(invoiceId)}/mainnet/readiness-recheck`, {
+    method: 'POST',
+    body: JSON.stringify({ preparationId, buyerAddress, buyerSignature }),
+  });
+}
+
+export function recordMainnetSubmission(
+  invoiceId: string,
+  preparationId: string,
+  handoffId: string,
+  transactionHash: string,
+): Promise<MainnetSubmissionResponse> {
+  return request<MainnetSubmissionResponse>(`/api/invoices/${encodeURIComponent(invoiceId)}/mainnet/submitted`, {
+    method: 'POST',
+    body: JSON.stringify({ preparationId, handoffId, txHash: transactionHash }),
+  });
+}
+
+export function recoverMainnetSubmission(
+  invoiceId: string,
+  preparationId: string,
+  buyerAddress: string,
+): Promise<MainnetSubmissionRecoveryResponse> {
+  return request<MainnetSubmissionRecoveryResponse>(`/api/invoices/${encodeURIComponent(invoiceId)}/mainnet/submission-recovery`, {
+    method: 'POST',
+    body: JSON.stringify({ preparationId, buyerAddress }),
+  });
+}
+
+export function reconcileMainnetPayment(
+  invoiceId: string,
+  preparationId: string,
+  transactionHash: string,
+): Promise<MainnetReconciliationResponse> {
+  return request<MainnetReconciliationResponse>(`/api/invoices/${encodeURIComponent(invoiceId)}/mainnet/reconcile`, {
+    method: 'POST',
+    body: JSON.stringify({ preparationId, txHash: transactionHash }),
   });
 }
 

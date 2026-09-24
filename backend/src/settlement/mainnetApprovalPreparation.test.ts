@@ -51,9 +51,10 @@ function fixture(preflightResult: MainnetPreflightResult = {
   builderCode: { status: 'VERIFIED', code: builderCode, payoutAddress: buyer, registryAddress: '0xd6c426f9c077358735622ae5a83468dc0510823b' as Address, chainId: 196 },
   balances: { assetAddress: token, assetBalance: '5000000000000000', assetDecimals: 18, allowance: '0', approvalSpender: spender, buyerAddress: buyer, buyerOkbBalance: '1000000000000000000', merchantAddress: merchant, merchantStablecoinBalance: '0', stablecoinAddress: mainnetAddressConfig.usdt0 as Address, stablecoinDecimals: 6, snapshotBlockNumber: '12345', snapshotBlockHash: `0x${'7'.repeat(64)}` as Hex },
   simulations: { stage: 'approval', approval: 'passed', swap: 'not-run' }, preparationId: evidence.id,
-}) {
+}, existingHandoff = false, existingSubmission = false) {
   const calls: MainnetPreflightRequest[] = [];
   const quoteRequests: Array<{ slippagePercent?: string }> = [];
+  let approvalPreparationCalls = 0;
   const adapter = {
     getQuote: async (request: { assetAmount: string; assetKey: string; buyerAddress: string; invoice: Invoice; slippagePercent?: string }) => {
       expect(request.assetAmount).toBe(MAINNET_APPROVAL_PROOF_INPUT);
@@ -63,13 +64,23 @@ function fixture(preflightResult: MainnetPreflightResult = {
       quoteRequests.push({ slippagePercent: request.slippagePercent });
       return quote;
     },
-    prepareApprovalTransaction: async () => approval,
+    prepareApprovalTransaction: async () => { approvalPreparationCalls += 1; return approval; },
     getBuilderCode: () => builderCode,
   } as unknown as OKXDEXMainnetAdapter;
   const repository = {
     savePreparation: async () => {}, getPreparation: async () => evidence,
     createHandoff: async () => null, getHandoff: async () => null,
-    recordSubmission: async () => null, getSubmission: async () => null, claimSettlement: async (): Promise<false> => false,
+    getHandoffForInvoice: async () => existingHandoff ? {
+      id: invoice.id, preparationId: evidence.id, invoiceId: invoice.id, buyer, chainId: 196 as const,
+      preparationHash: evidence.preparationHash, calldataHash: evidence.attributedSwapCalldataHash,
+      handoffStartedAt: '2026-09-23T00:00:30.000Z',
+    } : null,
+    recordSubmission: async () => null, getSubmission: async () => null,
+    getSubmissionForPreparation: async () => existingSubmission ? {
+      preparationId: evidence.id, handoffId: invoice.id, invoiceId: invoice.id, chainId: 196 as const,
+      transactionHash: `0x${'a'.repeat(64)}` as Hex, submittedAt: '2026-09-23T00:00:40.000Z',
+    } : null,
+    claimSettlement: async (): Promise<false> => false,
   } satisfies MainnetReconciliationRepository;
   const service = createMainnetApprovalPreparationService({
     createAdapter: () => adapter,
@@ -77,7 +88,7 @@ function fixture(preflightResult: MainnetPreflightResult = {
     preflight: async (request) => { calls.push(request); return preflightResult; },
     now: () => new Date('2026-09-23T00:30:00.000Z'),
   });
-  return { service, calls, quoteRequests };
+  return { service, calls, quoteRequests, getApprovalPreparationCalls: () => approvalPreparationCalls };
 }
 
 describe('backend-prepared mainnet approval service', () => {
@@ -91,6 +102,47 @@ describe('backend-prepared mainnet approval service', () => {
       invoiceId: invoice.id, buyer, merchant, chainId: 196, token, outputToken: mainnetAddressConfig.usdt0,
       spender, amount, minimumReceive: '1000000', nativeValue: '0', attributedApprovalCalldata: approval.attributedData,
     });
+  });
+
+  it('returns the same persisted preparation on READY with exact allowance without starting another quote/preparation', async () => {
+    const { service, calls, quoteRequests } = fixture({
+      status: 'READY', ready: true, reason: 'Exact allowance and full preflight passed.',
+      builderCode: { status: 'VERIFIED', code: builderCode, payoutAddress: buyer, registryAddress: '0xd6c426f9c077358735622ae5a83468dc0510823b' as Address, chainId: 196 },
+      balances: {
+        assetAddress: token, assetBalance: '5000000000000000', assetDecimals: 18, allowance: amount, approvalSpender: spender,
+        buyerAddress: buyer, buyerOkbBalance: '1000000000000000000', merchantAddress: merchant, merchantStablecoinBalance: '0',
+        stablecoinAddress: mainnetAddressConfig.usdt0 as Address, stablecoinDecimals: 6, snapshotBlockNumber: '12345', snapshotBlockHash: `0x${'7'.repeat(64)}` as Hex,
+      },
+      simulations: { stage: 'swap', approval: 'not-run', swap: 'passed' }, preparationId: evidence.id,
+    });
+
+    const result = await service(invoice, buyer);
+
+    expect(result.status).toBe('READY');
+    expect(result.preparation).toMatchObject({
+      preparationId: evidence.id, preparationHash: evidence.preparationHash, invoiceId: invoice.id,
+      buyer, merchant, chainId: 196, token, outputToken: evidence.outputToken, amount,
+      minimumReceive: evidence.minimumReceive, attributedApprovalCalldata: evidence.attributedApprovalCalldata,
+      builderCode, expiresAt: evidence.expiresAt, preparationBlockNumber: evidence.preparationBlockNumber,
+      snapshotAllowance: amount,
+      handoffMessage: expect.stringContaining(`Invoice ID: ${invoice.id}`),
+    });
+    expect(calls).toHaveLength(1);
+    expect(quoteRequests).toEqual([{ slippagePercent: '1.5' }]);
+  });
+
+  it.each([false, true])('returns the existing invoice handoff without fresh OKX preparation (submission: %s)', async (submitted) => {
+    const { service, calls, quoteRequests, getApprovalPreparationCalls } = fixture(undefined, true, submitted);
+    const result = await service(invoice, buyer);
+    expect(result.status).toBe(submitted ? 'SUBMITTED' : 'HANDOFF_UNRESOLVED');
+    expect(result.existingPayment).toMatchObject({
+      preparationId: evidence.id, handoffId: invoice.id, buyer,
+      ...(submitted ? { transactionHash: `0x${'a'.repeat(64)}` } : {}),
+    });
+    expect(result).not.toHaveProperty('preparation');
+    expect(quoteRequests).toHaveLength(0);
+    expect(getApprovalPreparationCalls()).toBe(0);
+    expect(calls).toHaveLength(0);
   });
 
   it('does not expose approval calldata unless Stage A passed and returned APPROVAL_REQUIRED', async () => {
@@ -107,8 +159,8 @@ describe('backend-prepared mainnet approval service', () => {
     const changedEvidence = { ...evidence, buyer: '0x1111111111111111111111111111111111111111' as Address };
     const isolatedRepository = {
       savePreparation: async () => {}, getPreparation: async () => changedEvidence,
-      createHandoff: async () => null, getHandoff: async () => null,
-      recordSubmission: async () => null, getSubmission: async () => null, claimSettlement: async (): Promise<false> => false,
+      createHandoff: async () => null, getHandoff: async () => null, getHandoffForInvoice: async () => null,
+      recordSubmission: async () => null, getSubmission: async () => null, getSubmissionForPreparation: async () => null, claimSettlement: async (): Promise<false> => false,
     };
     const result = await createMainnetApprovalPreparationService({
       createAdapter: () => ({ getQuote: async () => quote, prepareApprovalTransaction: async () => approval, getBuilderCode: () => builderCode } as unknown as OKXDEXMainnetAdapter),
