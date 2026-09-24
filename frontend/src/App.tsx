@@ -22,6 +22,7 @@ import {
   getMerchantPaymentHistory,
   reconcileInvoicePayment,
   prepareMainnetApproval,
+  preflightMainnetReadiness,
   recheckMainnetReadiness,
   recordMainnetSubmission,
   recoverMainnetSubmission,
@@ -67,8 +68,10 @@ import { validatePreparedMainnetApproval } from './config/mainnetApproval';
 import {
   canOfferMainnetPay,
   clearMainnetSubmissionRecovery,
+  mainnetPreparationNeedsRefresh,
   readMainnetSubmissionRecovery,
   saveMainnetSubmissionRecovery,
+  validateMainnetPrePromptReadiness,
   validateReadyMainnetHandoff,
   type MainnetSubmissionRecovery,
 } from './config/mainnetPayment';
@@ -1237,7 +1240,7 @@ function MainnetApprovalPanel({ invoice, onPaid }: { invoice: Invoice; onPaid: (
   );
   const [isPreparing, setIsPreparing] = useState(false);
   const [preparationError, setPreparationError] = useState('');
-  const [payStage, setPayStage] = useState<'idle' | 'rechecking' | 'wallet' | 'observing' | 'confirming' | 'error' | 'cancelled' | 'unresolved'>('idle');
+  const [payStage, setPayStage] = useState<'idle' | 'rechecking' | 'wallet' | 'observing' | 'confirming' | 'error' | 'unresolved'>('idle');
   const [payError, setPayError] = useState('');
   const [transactionHash, setTransactionHash] = useState<`0x${string}` | null>(submissionRecovery?.transactionHash ?? null);
   const preparationReachedReady = useRef(Boolean(submissionRecovery));
@@ -1332,15 +1335,22 @@ function MainnetApprovalPanel({ invoice, onPaid }: { invoice: Invoice; onPaid: (
     void observeSameMainnetTransaction(submissionRecovery, true);
   }, [address, chainId, invoice.id, isConnected, observeSameMainnetTransaction, submissionRecovery]);
 
-  async function refreshPreparation() {
-    if (preparationReachedReady.current || !address || chainId !== xLayerMainnet.id || invoice.status !== 'pending') return;
+  async function refreshPreparation(force = false): Promise<MainnetApprovalPreparationResponse | null> {
+    if ((!force && preparationReachedReady.current) || !address || chainId !== xLayerMainnet.id || invoice.status !== 'pending') return null;
+    if (force) {
+      preparationReachedReady.current = false;
+      setPreflight(null);
+    }
     setIsPreparing(true);
     setPreparationError('');
     try {
-      acceptPreparationResult(await prepareMainnetApproval(invoice.id, address));
+      const result = await prepareMainnetApproval(invoice.id, address);
+      acceptPreparationResult(result);
+      return result;
     } catch (error) {
       setPreflight(null);
       setPreparationError(error instanceof ApiError ? error.message : 'Unable to prepare the Mainnet payment.');
+      return null;
     } finally {
       setIsPreparing(false);
     }
@@ -1382,31 +1392,86 @@ function MainnetApprovalPanel({ invoice, onPaid }: { invoice: Invoice; onPaid: (
       return;
     }
 
-    let handoffRequestStarted = false;
+    let handoffPersisted = false;
     let submittedHash: `0x${string}` | null = null;
     setPayError('');
     setPayStage('rechecking');
+
+    const refreshExpiredPreparation = async () => {
+      const refreshed = await refreshPreparation(true);
+      if (refreshed?.status === 'HANDOFF_UNRESOLVED') {
+        setPayStage('unresolved');
+        setPayError(refreshed.reason);
+      } else if (refreshed?.status === 'SUBMITTED') {
+        setPayStage('idle');
+        setPayError('An existing submitted payment was found. Resuming that transaction; no new payment will be prompted.');
+      } else if (refreshed?.status === 'READY') {
+        setPayStage('idle');
+        setPayError('The preparation expired or was too close to expiry. A fresh preparation is ready; review it and click Pay again.');
+      } else {
+        setPayStage('error');
+        setPayError('The preparation expired before handoff. No invoice attempt was consumed. Refresh or retry when the backend is available.');
+      }
+    };
+
+    const resumeSubmitted = async (result: Awaited<ReturnType<typeof recheckMainnetReadiness>>) => {
+      if (!result.transactionHash || !/^0x[0-9a-fA-F]{64}$/.test(result.transactionHash)
+        || result.preparationId !== preparation.preparationId || !result.handoffId) {
+        throw new Error('A submitted transaction exists, but its server recovery binding is incomplete. No new transaction will be prompted.');
+      }
+      const attempt: MainnetSubmissionRecovery = {
+        invoiceId: invoice.id, preparationId: preparation.preparationId,
+        handoffId: result.handoffId, transactionHash: result.transactionHash, buyerAddress: address,
+      };
+      saveMainnetSubmissionRecovery(attempt);
+      setSubmissionRecovery(attempt);
+      setTransactionHash(attempt.transactionHash);
+      recoveryAttempted.current = `${attempt.preparationId}:${attempt.handoffId}:${attempt.transactionHash.toLowerCase()}`;
+      await observeSameMainnetTransaction(attempt, true);
+    };
+
     try {
       const rpcChainId = await publicClient.getChainId();
       if (rpcChainId !== 196 || chainId !== 196) throw new Error('The connected wallet and X Layer RPC must both report chain 196.');
       if (!preparation.handoffMessage) throw new Error('The server did not supply a buyer handoff authorization message.');
-      const buyerSignature = await signMessageAsync({ account: address, message: preparation.handoffMessage });
-      handoffRequestStarted = true;
-      const recheck = await recheckMainnetReadiness(invoice.id, preparation.preparationId, address, buyerSignature);
-      if (recheck.status === 'SUBMITTED') {
-        if (!recheck.transactionHash || !/^0x[0-9a-fA-F]{64}$/.test(recheck.transactionHash)
-          || recheck.preparationId !== preparation.preparationId || !recheck.handoffId) {
-          throw new Error('A submitted transaction exists, but its server recovery binding is incomplete. No new transaction will be prompted.');
+
+      // Finish the expensive, read-only validation before any wallet message prompt.
+      if (mainnetPreparationNeedsRefresh(preparation.expiresAt)) {
+        await refreshExpiredPreparation();
+        return;
+      }
+      const prePrompt = await preflightMainnetReadiness(invoice.id, preparation.preparationId, address);
+      if (prePrompt.status === 'SUBMITTED') {
+        await resumeSubmitted(prePrompt);
+        return;
+      }
+      if (prePrompt.status === 'HANDOFF_UNRESOLVED') {
+        preparationReachedReady.current = true;
+        setPayStage('unresolved');
+        setPayError(prePrompt.reason);
+        return;
+      }
+      if (prePrompt.status === 'EXPIRED') {
+        await refreshExpiredPreparation();
+        return;
+      }
+      const prePromptError = validateMainnetPrePromptReadiness(prePrompt, preparation, invoice, address, chainId);
+      if (prePromptError) {
+        if (mainnetPreparationNeedsRefresh(preparation.expiresAt)) {
+          await refreshExpiredPreparation();
+          return;
         }
-        const attempt: MainnetSubmissionRecovery = {
-          invoiceId: invoice.id, preparationId: preparation.preparationId,
-          handoffId: recheck.handoffId, transactionHash: recheck.transactionHash, buyerAddress: address,
-        };
-        saveMainnetSubmissionRecovery(attempt);
-        setSubmissionRecovery(attempt);
-        setTransactionHash(attempt.transactionHash);
-        recoveryAttempted.current = `${attempt.preparationId}:${attempt.handoffId}:${attempt.transactionHash.toLowerCase()}`;
-        await observeSameMainnetTransaction(attempt, true);
+        throw new Error(prePromptError);
+      }
+
+      const buyerSignature = await signMessageAsync({ account: address, message: preparation.handoffMessage });
+      const recheck = await recheckMainnetReadiness(invoice.id, preparation.preparationId, address, buyerSignature);
+      if (recheck.status === 'EXPIRED') {
+        await refreshExpiredPreparation();
+        return;
+      }
+      if (recheck.status === 'SUBMITTED') {
+        await resumeSubmitted(recheck);
         return;
       }
       if (recheck.status === 'HANDOFF_UNRESOLVED') {
@@ -1415,6 +1480,7 @@ function MainnetApprovalPanel({ invoice, onPaid }: { invoice: Invoice; onPaid: (
         setPayError(recheck.reason);
         return;
       }
+      handoffPersisted = recheck.status === 'READY' && Boolean(recheck.handoffId);
       const handoffError = validateReadyMainnetHandoff(recheck, preparation, invoice, address, chainId);
       if (handoffError) throw new Error(handoffError);
       const walletTransaction = recheck.walletTransaction;
@@ -1447,15 +1513,15 @@ function MainnetApprovalPanel({ invoice, onPaid }: { invoice: Invoice; onPaid: (
       const message = error instanceof Error ? error.message : 'The Mainnet payment handoff failed.';
       const rejection = typeof error === 'object' && error !== null
         && ('code' in error && error.code === 4001 || 'name' in error && error.name === 'UserRejectedRequestError');
-      if (handoffRequestStarted && !submittedHash) {
+      if (handoffPersisted && !submittedHash) {
         preparationReachedReady.current = true;
-        setPayStage(rejection ? 'cancelled' : 'unresolved');
-        setPayError(rejection
-          ? 'Payment cancelled in the wallet. This invoice cannot be retried; ask the merchant for a new invoice.'
-          : `Payment status unresolved. ${message} This invoice cannot be retried; check your wallet and ask the merchant for a new invoice if payment did not complete.`);
+        setPayStage('unresolved');
+        setPayError(`Payment status unresolved. ${message} This invoice already has a persisted handoff; check the buyer wallet before asking the merchant for a new invoice.`);
       } else {
-        setPayStage(rejection ? 'cancelled' : 'error');
-        setPayError(message);
+        setPayStage('idle');
+        setPayError(rejection
+          ? 'Wallet authorization was cancelled before a handoff was persisted. No invoice attempt was consumed; click Pay to retry.'
+          : message);
       }
     }
   }
@@ -1517,7 +1583,6 @@ function MainnetApprovalPanel({ invoice, onPaid }: { invoice: Invoice; onPaid: (
               {payStage === 'wallet' ? <p className="mt-3 text-sm font-semibold text-ink/70">Review and confirm the exact payment in OKX Wallet. PortPay will not sign or submit it for you.</p> : null}
               {payStage === 'observing' || payStage === 'confirming' ? <p className="mt-3 text-sm font-semibold text-ink/70">Transaction submitted; waiting for exact transaction observation and canonical settlement confirmation.</p> : null}
               {payStage === 'unresolved' ? <p className="mt-3 text-sm font-semibold text-amber-900">Payment status unresolved. This invoice cannot be retried. Check the buyer wallet before the merchant creates a new invoice.</p> : null}
-              {payStage === 'cancelled' ? <p className="mt-3 text-sm font-semibold text-rose-800">Payment cancelled or failed. This invoice cannot be retried after its Mainnet handoff; ask the merchant for a new invoice.</p> : null}
               {transactionHash ? <p className="mt-3 text-xs text-ink/65">Settlement transaction: <a className="font-mono font-semibold underline" href={explorerUrl} target="_blank" rel="noreferrer">{transactionHash}</a></p> : null}
               {payError ? <p className="mt-3 text-sm text-rose-700">{payError}</p> : null}
               {transactionHash && submissionRecovery && payStage === 'error' ? (
@@ -1527,7 +1592,7 @@ function MainnetApprovalPanel({ invoice, onPaid }: { invoice: Invoice; onPaid: (
               ) : null}
             </div>
           ) : null}
-          {preflight?.status !== 'READY' && !preflight?.existingPayment && !transactionHash && payStage !== 'unresolved' && payStage !== 'cancelled' ? <button type="button" className="mt-3 text-sm font-semibold text-ink/60 underline underline-offset-4 disabled:opacity-50" onClick={() => void refreshPreparation()} disabled={isPreparing || isPaying || isWalletPromptOpen}>
+          {preflight?.status !== 'READY' && !preflight?.existingPayment && !transactionHash && payStage !== 'unresolved' ? <button type="button" className="mt-3 text-sm font-semibold text-ink/60 underline underline-offset-4 disabled:opacity-50" onClick={() => void refreshPreparation()} disabled={isPreparing || isPaying || isWalletPromptOpen}>
             {preflight ? 'Refresh mainnet preparation' : 'Retry mainnet preparation'}
           </button> : null}
         </div>

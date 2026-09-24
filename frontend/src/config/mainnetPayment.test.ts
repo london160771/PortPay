@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 import type { Invoice, MainnetApprovalPreparation, MainnetApprovalPreparationResponse, MainnetReadinessRecheckResponse } from './api';
 import { toBuilderCodeDataSuffix } from './builderCodes';
 import { mainnetNetworkConfig } from './network';
-import { canOfferMainnetPay, clearMainnetSubmissionRecovery, readMainnetSubmissionRecovery, saveMainnetSubmissionRecovery, validateReadyMainnetHandoff } from './mainnetPayment';
+import { canOfferMainnetPay, clearMainnetSubmissionRecovery, mainnetPreparationNeedsRefresh, readMainnetSubmissionRecovery, saveMainnetSubmissionRecovery, validateMainnetPrePromptReadiness, validateReadyMainnetHandoff } from './mainnetPayment';
 
 const buyer = '0xbabdfef588cf57efcc7c8857960e3ccdd9167589' as Address;
 const merchant = '0x815c2fb8178f0bf80ada8c5b97ff44ece90e6e25' as Address;
@@ -48,6 +48,21 @@ function readiness(overrides: Partial<MainnetReadinessRecheckResponse> = {}): Ma
 }
 
 describe('buyer-signed Mainnet handoff guard', () => {
+  it('refreshes an expired or too-close preparation before requesting a wallet signature', () => {
+    expect(mainnetPreparationNeedsRefresh('2026-09-23T00:00:19.000Z', now)).toBe(true);
+    expect(mainnetPreparationNeedsRefresh(expiresAt, now)).toBe(false);
+    expect(mainnetPreparationNeedsRefresh('not-a-date', now)).toBe(true);
+    const fresh = preparation();
+    expect(validateMainnetPrePromptReadiness({
+      status: 'PREFLIGHT_PASSED', ready: false, reason: 'Read-only gates passed.', preparationId,
+      preparationHash: fresh.preparationHash, expiresAt: fresh.expiresAt, checkedAt: new Date(now).toISOString(),
+    }, fresh, invoice, buyer, 196, now)).toBeNull();
+    expect(validateMainnetPrePromptReadiness({
+      status: 'PREFLIGHT_PASSED', ready: false, reason: 'Read-only gates passed.', preparationId,
+      preparationHash: fresh.preparationHash, expiresAt: '2026-09-23T00:00:30.000Z', checkedAt: new Date(now).toISOString(),
+    }, fresh, invoice, buyer, 196, now)).not.toBeNull();
+  });
+
   it('makes Pay available for a READY response containing the validated existing preparation', () => {
     const persistedPreparation = preparation();
     const response: MainnetApprovalPreparationResponse = { status: 'READY', reason: 'Full preflight passed.', preparation: persistedPreparation };
@@ -97,7 +112,7 @@ describe('buyer-signed Mainnet handoff guard', () => {
       clearMainnetSubmissionRecovery(invoiceId);
       expect(readMainnetSubmissionRecovery(invoiceId)).toBeNull();
       expect(canOfferMainnetPay({
-        status: 'HANDOFF_UNRESOLVED', reason: 'Payment status unresolved.',
+        status: 'HANDOFF_UNRESOLVED',
         existingPayment: { preparationId, handoffId: attempt.handoffId, buyer },
       }, invoice, buyer, 196, now)).toBe(false);
     } finally {

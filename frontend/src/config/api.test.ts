@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { invoiceStatusLabel, paymentStatusLabel, paymentSuccessLabel, readInvoiceRoute, showBuyerSelectionDetails } from './invoice';
-import { recoverMainnetSubmission, reconcileMainnetPayment, recordMainnetSubmission, recheckMainnetReadiness, resolveBackendUrl } from './api';
+import { preflightMainnetReadiness, recoverMainnetSubmission, reconcileMainnetPayment, recordMainnetSubmission, recheckMainnetReadiness, resolveBackendUrl } from './api';
 
 describe('invoice link routing', () => {
   it('resolves a payment URL invoice ID and handles a missing ID', () => {
@@ -41,6 +41,18 @@ describe('invoice link routing', () => {
 });
 
 describe('Mainnet wallet handoff API boundary', () => {
+  it('runs read-only readiness without sending a buyer signature or creating a handoff', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({ status: 'PREFLIGHT_PASSED', ready: false }), { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+    try {
+      await preflightMainnetReadiness('invoice/one', 'prep-1', '0xbuyer');
+      expect(fetchMock.mock.calls[0]?.[0]).toContain('/api/invoices/invoice%2Fone/mainnet/readiness-recheck');
+      expect(JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body))).toEqual({ preparationId: 'prep-1', buyerAddress: '0xbuyer', preflightOnly: true });
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it('sends persisted preparation identity and buyer authorization to the readiness recheck', async () => {
     const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({ status: 'READY', ready: true }), { status: 200 }));
     vi.stubGlobal('fetch', fetchMock);

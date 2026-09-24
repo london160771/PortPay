@@ -22,7 +22,7 @@ import {
 } from './mainnetReceipt.js';
 
 export type MainnetReadinessRecheck = {
-  status: 'READY' | 'SUBMITTED' | 'HANDOFF_UNRESOLVED' | 'BLOCKED' | 'EXPIRED' | 'WRONG_CHAIN' | 'WRONG_RECIPIENT'
+  status: 'READY' | 'PREFLIGHT_PASSED' | 'SUBMITTED' | 'HANDOFF_UNRESOLVED' | 'BLOCKED' | 'EXPIRED' | 'WRONG_CHAIN' | 'WRONG_RECIPIENT'
     | 'INVALID_ATTRIBUTION' | 'INSUFFICIENT_BALANCE' | 'INSUFFICIENT_ALLOWANCE' | 'INSUFFICIENT_GAS';
   ready: boolean;
   reason: string;
@@ -43,9 +43,12 @@ export type MainnetReadinessRecheck = {
   checkedAt: string;
 };
 
+export const MAINNET_PRE_PROMPT_MIN_REMAINING_MS = 30_000;
+export type MainnetReadinessRecheckOptions = { preflightOnly?: boolean };
+
 export type MainnetPaymentService = {
   getAttemptStatus(invoice: Invoice): Promise<'none' | 'unresolved' | 'submitted'>;
-  recheck(invoice: Invoice, preparationId: string, buyerAddress: Address, buyerSignature: Hex): Promise<MainnetReadinessRecheck>;
+  recheck(invoice: Invoice, preparationId: string, buyerAddress: Address, buyerSignature?: Hex, options?: MainnetReadinessRecheckOptions): Promise<MainnetReadinessRecheck>;
   recordSubmission(invoice: Invoice, preparationId: string, handoffId: string, transactionHash: Hex): Promise<{ status: 'submitted'; preparationId: string; handoffId: string; transactionHash: Hex; submittedAt: string; expiresAt: string }>;
   recoverSubmission(invoice: Invoice, preparationId: string, buyerAddress: Address): Promise<{ status: 'submitted'; preparationId: string; handoffId: string; transactionHash: Hex; submittedAt: string; expiresAt: string } | null>;
   reconcile(invoice: Invoice, preparationId: string, transactionHash: Hex): Promise<{ verification: MainnetReceiptVerification; preparation: MainnetPreparationEvidence }>;
@@ -155,7 +158,8 @@ export function createMainnetPaymentService(dependencies: MainnetPaymentServiceD
       }
       return 'submitted';
     },
-    async recheck(invoice, preparationId, buyerAddress, buyerSignature) {
+    async recheck(invoice, preparationId, buyerAddress, buyerSignature, options = {}) {
+      const preflightOnly = options.preflightOnly === true;
       const checkedAt = now().toISOString();
       const blocked = (status: MainnetReadinessRecheck['status'], reason: string, evidence?: MainnetPreparationEvidence): MainnetReadinessRecheck => ({
         status, ready: false, reason, preparationId, checkedAt,
@@ -169,12 +173,6 @@ export function createMainnetPaymentService(dependencies: MainnetPaymentServiceD
         if (!evidence) return blocked('BLOCKED', 'Persisted mainnet preparation was not found.');
         const binding = validatePersistedMainnetPreparation(evidence, invoice);
         if (evidence.buyer.toLowerCase() !== buyerAddress.toLowerCase()) return blocked('BLOCKED', 'Connected buyer does not match the persisted preparation.', evidence);
-        if (!/^0x[0-9a-fA-F]{130}$/.test(buyerSignature)
-          || !await verifyBuyerHandoffSignature({
-            buyer: evidence.buyer, message: mainnetHandoffAuthorizationMessage(evidence), signature: buyerSignature,
-          })) {
-          return blocked('BLOCKED', 'A valid buyer wallet signature for this exact invoice and preparation is required.', evidence);
-        }
         let handoff = await repository.getHandoffForInvoice(invoice.id);
         if (handoff && !handoffMatchesPreparation(handoff, invoice, evidence)) {
           return blocked('BLOCKED', 'The invoice handoff belongs to a different buyer, preparation, or calldata.', evidence);
@@ -201,11 +199,20 @@ export function createMainnetPaymentService(dependencies: MainnetPaymentServiceD
             checkedAt: now().toISOString(),
           };
         }
+        if (!preflightOnly && (!buyerSignature || !/^0x[0-9a-fA-F]{130}$/.test(buyerSignature)
+          || !await verifyBuyerHandoffSignature({
+            buyer: evidence.buyer, message: mainnetHandoffAuthorizationMessage(evidence), signature: buyerSignature,
+          }))) {
+          return blocked('BLOCKED', 'A valid buyer wallet signature for this exact invoice and preparation is required.', evidence);
+        }
         if (await publicClient.getChainId() !== 196) return blocked('WRONG_CHAIN', 'Read-only RPC is not X Layer Mainnet.', evidence);
         const currentTime = now().getTime();
         const expiresAt = Date.parse(evidence.expiresAt);
-        if (!Number.isFinite(expiresAt) || currentTime >= expiresAt) {
-          return blocked('EXPIRED', 'Preparation has expired and cannot authorize a new wallet handoff.', evidence);
+        const requiredRemainingMs = preflightOnly ? MAINNET_PRE_PROMPT_MIN_REMAINING_MS : 0;
+        if (!Number.isFinite(expiresAt) || currentTime >= expiresAt || expiresAt - currentTime < requiredRemainingMs) {
+          return blocked('EXPIRED', preflightOnly
+            ? 'Preparation is expired or too close to expiry for a wallet prompt; refresh it before continuing.'
+            : 'Preparation has expired and cannot authorize a new wallet handoff.', evidence);
         }
         const codeCheck = await verifyConfiguredBuilderCode(evidence, verifyBuilder, configuredBuilderCode, configuredBuilderPayout);
         if (codeCheck.status !== 'VERIFIED' || codeCheck.chainId !== 196
@@ -237,8 +244,19 @@ export function createMainnetPaymentService(dependencies: MainnetPaymentServiceD
           value: evidence.swap.value,
         });
         if (BigInt(balances.buyerOkbBalance) < BigInt(gas.requiredGasWei!)) return blocked('INSUFFICIENT_GAS', 'Buyer OKB balance is below the buffered requirement for the exact persisted calls.', evidence);
-        if (now().getTime() >= Date.parse(evidence.expiresAt)) {
-          return blocked('EXPIRED', 'Preparation expired before the server could authorize wallet handoff.', evidence);
+        const remainingAtCompletion = Date.parse(evidence.expiresAt) - now().getTime();
+        if (now().getTime() >= Date.parse(evidence.expiresAt) || remainingAtCompletion < requiredRemainingMs) {
+          return blocked('EXPIRED', preflightOnly
+            ? 'Preparation became too close to expiry during final readiness; refresh it before opening the wallet.'
+            : 'Preparation expired before the server could authorize wallet handoff.', evidence);
+        }
+        if (preflightOnly) {
+          return {
+            status: 'PREFLIGHT_PASSED', ready: false,
+            reason: 'Read-only final readiness passed with sufficient preparation lifetime. No handoff was persisted and no wallet prompt has been requested.',
+            preparationId, preparationHash: evidence.preparationHash, expiresAt: evidence.expiresAt,
+            snapshotBlockNumber: balances.snapshotBlockNumber, checkedAt: now().toISOString(),
+          };
         }
         handoff = await repository.createHandoff({
           preparationId: evidence.id,

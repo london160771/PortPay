@@ -7,6 +7,32 @@ export type MainnetSubmissionRecovery = Pick<MainnetSubmissionResponse, 'prepara
   buyerAddress: Address;
 };
 
+export const MAINNET_PRE_PROMPT_MIN_REMAINING_MS = 30_000;
+
+export function mainnetPreparationNeedsRefresh(expiresAt: string, nowMs = Date.now()): boolean {
+  const expiry = Date.parse(expiresAt);
+  return !Number.isFinite(expiry) || expiry - nowMs < MAINNET_PRE_PROMPT_MIN_REMAINING_MS;
+}
+
+export function validateMainnetPrePromptReadiness(
+  result: MainnetReadinessRecheckResponse,
+  preparation: MainnetApprovalPreparation,
+  invoice: Invoice,
+  buyer: Address,
+  chainId: number | undefined,
+  nowMs = Date.now(),
+): string | null {
+  const preparationError = validatePreparedMainnetApproval(preparation, invoice, buyer, chainId, nowMs);
+  if (preparationError) return preparationError;
+  if (result.status !== 'PREFLIGHT_PASSED' || result.ready || result.walletTransaction) {
+    return result.reason || 'Read-only final readiness did not pass.';
+  }
+  if (result.preparationId !== preparation.preparationId || result.preparationHash !== preparation.preparationHash
+    || result.expiresAt !== preparation.expiresAt) return 'The read-only readiness result does not match the displayed persisted preparation.';
+  if (mainnetPreparationNeedsRefresh(preparation.expiresAt, nowMs)) return 'The preparation does not have sufficient lifetime for a wallet prompt. Refresh it first.';
+  return null;
+}
+
 const recoveryStoragePrefix = 'portpay.mainnet.submission.';
 
 export function canOfferMainnetPay(

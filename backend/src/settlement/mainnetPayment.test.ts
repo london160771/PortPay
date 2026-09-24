@@ -1,11 +1,11 @@
 import { encodeAbiParameters, encodeFunctionData, parseAbi, type Address, type Hex } from 'viem';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { mainnetAddressConfig } from '../config/xlayerMainnet.js';
 import type { Invoice } from '../invoices/types.js';
 import type { OkxApprovalData, OkxDexApiClient, OkxQuoteData, OkxSwapData } from './okxDexApi.js';
 import { OKXDEXMainnetAdapter } from './mainnet.js';
 import { InMemoryMainnetReconciliationRepository, persistMainnetPreparation, type MainnetReconciliationRepository } from './mainnetReconciliationRepository.js';
-import { createMainnetPaymentService } from './mainnetPayment.js';
+import { createMainnetPaymentService, MAINNET_PRE_PROMPT_MIN_REMAINING_MS } from './mainnetPayment.js';
 import type { MainnetBuilderCodeCheck } from './mainnetBuilderCodes.js';
 import type { MainnetReadOnlyClient } from './mainnetPreflight.js';
 import type { MainnetReceiptClient } from './mainnetReceipt.js';
@@ -18,9 +18,7 @@ const builderCode = 'mainnetcode12345';
 const inputAmount = '4800000000000000';
 const buyerSignature = `0x${'a'.repeat(130)}` as Hex;
 const nowIso = '2026-09-23T00:00:00.000Z';
-const nowMs = Date.parse(nowIso);
 const snapshotHash = `0x${'d'.repeat(64)}` as Hex;
-const deadline = BigInt(Math.floor((nowMs + 55_000) / 1000));
 const invoice: Invoice = {
   id: '00000000-0000-4000-8000-000000000001', title: 'Mainnet recheck', amountUsdt0: '1',
   merchantAddress: merchant, paymentUrl: 'https://portpay.example/pay/00000000-0000-4000-8000-000000000001',
@@ -48,7 +46,7 @@ function approvalResponse(): OkxApprovalData {
     dexContractAddress: spender, gasLimit: '70000', gasPrice: '1000000',
   };
 }
-function swapResponse(): OkxSwapData {
+function swapResponse(deadline: bigint): OkxSwapData {
   const data = encodeFunctionData({
     abi: swapAbi, functionName: 'dagSwapTo',
     args: [1n, merchant, {
@@ -64,9 +62,10 @@ function swapResponse(): OkxSwapData {
 class FakeApi {
   swapCalls = 0;
   approvalCalls = 0;
+  constructor(private readonly deadline: bigint) {}
   async getQuote() { return quoteData(); }
   async getApprovalTransaction() { this.approvalCalls += 1; return approvalResponse(); }
-  async getSwapTransaction() { this.swapCalls += 1; return swapResponse(); }
+  async getSwapTransaction() { this.swapCalls += 1; return swapResponse(this.deadline); }
 }
 const verifiedBuilder = async ({ code, expectedPayoutAddress }: { code: string; expectedPayoutAddress?: string }): Promise<MainnetBuilderCodeCheck> => ({
   status: 'VERIFIED', code, payoutAddress: expectedPayoutAddress as Address, expectedPayoutAddress: expectedPayoutAddress as Address,
@@ -103,14 +102,15 @@ function makeClient(options: ClientOptions = {}, observations: { estimates: Hex[
   } as MainnetReadOnlyClient & MainnetReceiptClient & { swapCalldata?: Hex };
 }
 
-async function setup(options: ClientOptions = {}) {
-  const api = new FakeApi();
-  const adapter = new OKXDEXMainnetAdapter({ apiClient: api as unknown as OkxDexApiClient, builderCode, now: () => new Date(nowIso) });
+async function setup(options: ClientOptions = {}, baseIso = nowIso, sharedRepository?: InMemoryMainnetReconciliationRepository) {
+  const baseMs = Date.parse(baseIso);
+  const api = new FakeApi(BigInt(Math.floor((baseMs + 55_000) / 1000)));
+  const adapter = new OKXDEXMainnetAdapter({ apiClient: api as unknown as OkxDexApiClient, builderCode, now: () => new Date(baseIso) });
   const quote = await adapter.getQuote({ assetAmount: inputAmount, assetKey: 'wNvda', buyerAddress: buyer, invoice, slippagePercent: '1.5' });
   const approval = await adapter.prepareApprovalTransaction(quote);
   const swap = await adapter.prepareSwapTransaction(quote);
-  let clock = new Date(nowIso);
-  const repository = new InMemoryMainnetReconciliationRepository(() => clock);
+  let clock = new Date(baseIso);
+  const repository = sharedRepository ?? new InMemoryMainnetReconciliationRepository(() => clock);
   const evidence = await persistMainnetPreparation({
     repository, quote, approval, swap, builderPayout: buyer, snapshotBlockNumber: 49n, snapshotBlockHash: snapshotHash,
   });
@@ -125,6 +125,72 @@ async function setup(options: ClientOptions = {}) {
 }
 
 describe('mainnet payment readiness and submitted transaction infrastructure', () => {
+  it('runs the final wallet preflight before signing, with no handoff or wallet transaction returned', async () => {
+    const value = await setup();
+    const verifySignature = vi.fn(async () => true);
+    const service = createMainnetPaymentService({
+      createRepository: () => value.repository, publicClient: value.publicClient, now: () => new Date(nowIso),
+      verifyBuilderCode: verifiedBuilder, mainnetBuilderCode: builderCode, mainnetBuilderPayoutAddress: buyer,
+      verifyBuyerHandoffSignature: verifySignature,
+    });
+
+    const result = await service.recheck(invoice, value.evidence.id, buyer, undefined, { preflightOnly: true });
+
+    expect(result).toMatchObject({
+      status: 'PREFLIGHT_PASSED', ready: false, preparationId: value.evidence.id,
+      preparationHash: value.evidence.preparationHash, expiresAt: value.evidence.expiresAt,
+    });
+    expect(result).not.toHaveProperty('walletTransaction');
+    expect(result).not.toHaveProperty('handoffId');
+    expect(verifySignature).not.toHaveBeenCalled();
+    await expect(value.repository.getHandoffForInvoice(invoice.id)).resolves.toBeNull();
+    expect(await service.getAttemptStatus(invoice)).toBe('none');
+  });
+
+  it('rejects expired or nearly expired preparation before any wallet authorization prompt', async () => {
+    const value = await setup();
+    value.setClock(new Date(Date.parse(value.evidence.expiresAt) - MAINNET_PRE_PROMPT_MIN_REMAINING_MS + 1));
+    const verifySignature = vi.fn(async () => true);
+    const service = createMainnetPaymentService({
+      createRepository: () => value.repository, publicClient: value.publicClient, now: () => new Date(Date.parse(value.evidence.expiresAt) - MAINNET_PRE_PROMPT_MIN_REMAINING_MS + 1),
+      verifyBuilderCode: verifiedBuilder, mainnetBuilderCode: builderCode, mainnetBuilderPayoutAddress: buyer,
+      verifyBuyerHandoffSignature: verifySignature,
+    });
+
+    const result = await service.recheck(invoice, value.evidence.id, buyer, undefined, { preflightOnly: true });
+
+    expect(result).toMatchObject({ status: 'EXPIRED', ready: false });
+    expect(result.reason).toMatch(/too close to expiry/i);
+    expect(verifySignature).not.toHaveBeenCalled();
+    expect(value.observations.estimates).toHaveLength(0);
+    await expect(value.repository.getHandoffForInvoice(invoice.id)).resolves.toBeNull();
+    expect(await service.getAttemptStatus(invoice)).toBe('none');
+  });
+
+  it('does not consume the invoice when expiry wins during handoff insertion; a fresh preparation can then retry', async () => {
+    const value = await setup();
+    const createHandoff = value.repository.createHandoff.bind(value.repository);
+    value.repository.createHandoff = async (args) => {
+      value.setClock(new Date(value.evidence.expiresAt));
+      return createHandoff(args);
+    };
+
+    const expired = await value.service.recheck(invoice, value.evidence.id, buyer, buyerSignature);
+
+    expect(expired).toMatchObject({ status: 'EXPIRED', ready: false });
+    await expect(value.repository.getHandoffForInvoice(invoice.id)).resolves.toBeNull();
+    expect(await value.service.getAttemptStatus(invoice)).toBe('none');
+
+    value.repository.createHandoff = createHandoff;
+    const freshStart = new Date(Date.parse(value.evidence.expiresAt) + 1_000);
+    value.setClock(freshStart);
+    const fresh = await setup({}, freshStart.toISOString(), value.repository);
+    const retry = await fresh.service.recheck(invoice, fresh.evidence.id, buyer, buyerSignature);
+    expect(retry).toMatchObject({ status: 'READY', ready: true, preparationId: fresh.evidence.id });
+    expect(await fresh.repository.getHandoffForInvoice(invoice.id)).toMatchObject({ preparationId: fresh.evidence.id });
+    expect(fresh.evidence.id).not.toBe(value.evidence.id);
+  });
+
   it('returns READY only after persisted binding, exact allowance, balance, exact-call estimates, and exact calldata simulation pass', async () => {
     const value = await setup();
     const result = await value.service.recheck(invoice, value.evidence.id, buyer, buyerSignature);
@@ -160,6 +226,16 @@ describe('mainnet payment readiness and submitted transaction infrastructure', (
     expect(retry).toMatchObject({ status: 'HANDOFF_UNRESOLVED', ready: false, preparationId: originalPreparation, handoffId: invoice.id });
     expect(retry).not.toHaveProperty('walletTransaction');
     expect(value.api.swapCalls).toBe(1);
+  });
+
+  it('starts the one-shot invoice rule only after the handoff has been persisted successfully', async () => {
+    const value = await setup();
+    const ready = await value.service.recheck(invoice, value.evidence.id, buyer, buyerSignature);
+    expect(ready).toMatchObject({ status: 'READY', ready: true, handoffId: invoice.id });
+    await expect(value.repository.getHandoffForInvoice(invoice.id)).resolves.toMatchObject({ preparationId: value.evidence.id });
+    const retry = await value.service.recheck(invoice, value.evidence.id, buyer, buyerSignature);
+    expect(retry).toMatchObject({ status: 'HANDOFF_UNRESOLVED', ready: false, handoffId: ready.handoffId });
+    expect(retry).not.toHaveProperty('walletTransaction');
   });
 
   it('fails closed after a cancelled or lost wallet result, then recovers only the original recorded hash', async () => {

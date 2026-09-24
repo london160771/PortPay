@@ -177,7 +177,13 @@ describe('backend routes', () => {
     const txHash = `0x${'a'.repeat(64)}`;
     const mainnetPayment = {
       async getAttemptStatus() { return 'none' as const; },
-      async recheck(...args: unknown[]) { calls.push(['recheck', ...args]); return { status: 'READY' as const, ready: true, reason: 'all gates passed', preparationId: '00000000-0000-4000-8000-000000000002', handoffId: '00000000-0000-4000-8000-000000000003', checkedAt: new Date().toISOString() }; },
+      async recheck(...args: unknown[]) {
+        calls.push(['recheck', ...args]);
+        const preflightOnly = (args[4] as { preflightOnly?: boolean } | undefined)?.preflightOnly;
+        return preflightOnly
+          ? { status: 'PREFLIGHT_PASSED' as const, ready: false, reason: 'read-only gates passed', preparationId: '00000000-0000-4000-8000-000000000002', checkedAt: new Date().toISOString() }
+          : { status: 'READY' as const, ready: true, reason: 'all gates passed', preparationId: '00000000-0000-4000-8000-000000000002', handoffId: '00000000-0000-4000-8000-000000000003', checkedAt: new Date().toISOString() };
+      },
       async recordSubmission(...args: unknown[]) { calls.push(['submitted', ...args]); return { status: 'submitted' as const, preparationId: '00000000-0000-4000-8000-000000000002', handoffId: '00000000-0000-4000-8000-000000000003', transactionHash: txHash as `0x${string}`, submittedAt: new Date().toISOString(), expiresAt: new Date(Date.now() + 30_000).toISOString() }; },
       async recoverSubmission() { return null; },
       async reconcile(...args: unknown[]) {
@@ -211,6 +217,12 @@ describe('backend routes', () => {
         body: JSON.stringify({ preparationId, buyerAddress: '0xbabdfef588cf57efcc7c8857960e3ccdd9167589' }),
       });
       expect(unsigned.status).toBe(400);
+      const preflight = await fetch(`${baseUrl}/api/invoices/${invoice.id}/mainnet/readiness-recheck`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ preparationId, buyerAddress: '0xbabdfef588cf57efcc7c8857960e3ccdd9167589', preflightOnly: true }),
+      });
+      expect(preflight.status).toBe(200);
+      expect((await preflight.json()).status).toBe('PREFLIGHT_PASSED');
       const recheck = await fetch(`${baseUrl}/api/invoices/${invoice.id}/mainnet/readiness-recheck`, {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ preparationId, buyerAddress: '0xbabdfef588cf57efcc7c8857960e3ccdd9167589', buyerSignature: `0x${'a'.repeat(130)}`, router: '0x1111111111111111111111111111111111111111' }),
@@ -238,12 +250,14 @@ describe('backend routes', () => {
       expect(retry.status).toBe(200);
       expect(calls.filter(([kind]) => kind === 'reconcile')).toHaveLength(2);
     });
-    expect(calls[0]?.[0]).toBe('recheck');
-    expect(calls[1]?.slice(1)).toHaveLength(4);
-    expect(calls[2]?.slice(1)).toHaveLength(3);
-    expect((calls[2]?.[1] as Invoice).id).toBe(invoice.id);
-    expect(calls[2]?.[2]).toBe(preparationId);
-    expect(calls[2]?.[3]).toBe(txHash);
+    expect(calls.filter(([kind]) => kind === 'recheck')).toHaveLength(2);
+    expect(calls[0]?.[5]).toMatchObject({ preflightOnly: true });
+    expect(calls[1]?.[5]).toMatchObject({ preflightOnly: false });
+    expect(calls[2]?.slice(1)).toHaveLength(4);
+    expect(calls[3]?.slice(1)).toHaveLength(3);
+    expect((calls[3]?.[1] as Invoice).id).toBe(invoice.id);
+    expect(calls[3]?.[2]).toBe(preparationId);
+    expect(calls[3]?.[3]).toBe(txHash);
   });
 
   it('does not mark a mainnet invoice paid when receipt verification reports a reverted transaction', async () => {

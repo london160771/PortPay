@@ -231,6 +231,17 @@ export function recheckMainnetReadiness(
   });
 }
 
+export function preflightMainnetReadiness(
+  invoiceId: string,
+  preparationId: string,
+  buyerAddress: string,
+): Promise<MainnetReadinessRecheckResponse> {
+  return request<MainnetReadinessRecheckResponse>(`/api/invoices/${encodeURIComponent(invoiceId)}/mainnet/readiness-recheck`, {
+    method: 'POST',
+    body: JSON.stringify({ preparationId, buyerAddress, preflightOnly: true }),
+  });
+}
+
 export function recordMainnetSubmission(
   invoiceId: string,
   preparationId: string,
