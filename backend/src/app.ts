@@ -7,7 +7,7 @@ import {
   runtimeConfig,
 } from './config/runtime.js';
 import type { MerchantAuthConfig, MerchantCredential } from './config/runtime.js';
-import { xLayerMainnet } from './config/xlayerMainnet.js';
+import { mainnetSupportedAssets, xLayerMainnet } from './config/xlayerMainnet.js';
 import { createInvoice } from './invoices/service.js';
 import { reconcileInvoicePayment } from './invoices/settlement.js';
 import {
@@ -202,10 +202,21 @@ export function createApp(
     let invoiceId: string;
     let invoice: Invoice | null;
     let buyerAddress: `0x${string}`;
+    let assetKey: 'wNvda' | 'wAapl';
+    let preparationId: string | undefined;
     try {
       invoiceId = validateInvoiceId(request.params.invoiceId);
       invoice = await invoiceRepository.findById(invoiceId);
       buyerAddress = validateWalletAddress(request.body?.buyerAddress, 'Buyer wallet') as `0x${string}`;
+      const requestedAssetKey = request.body?.assetKey ?? 'wNvda';
+      if (!mainnetSupportedAssets.some((asset) => asset.key === requestedAssetKey)) {
+        response.status(400).json({ error: 'Choose a supported Mainnet xStock asset.' });
+        return;
+      }
+      assetKey = requestedAssetKey;
+      preparationId = request.body?.preparationId === undefined
+        ? undefined
+        : validateInvoiceId(request.body.preparationId);
     } catch (error) {
       next(error);
       return;
@@ -227,7 +238,7 @@ export function createApp(
       return;
     }
     try {
-      response.json(await options.mainnetApprovalPreparation(invoice, buyerAddress));
+      response.json(await options.mainnetApprovalPreparation(invoice, buyerAddress, { assetKey, ...(preparationId ? { preparationId } : {}) }));
     } catch {
       response.status(503).json({ error: 'A safe mainnet approval preparation could not be produced. Check mainnet RPC, OKX, Builder Code, and Supabase configuration.' });
     }

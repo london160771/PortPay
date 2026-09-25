@@ -6,6 +6,7 @@ import {
   mainnetNetworkConfig,
   VERIFIED_MAINNET_USDT0_ADDRESS,
   VERIFIED_MAINNET_WNVDA_ADDRESS,
+  VERIFIED_MAINNET_WAAPL_ADDRESS,
 } from './network';
 
 const approveAbi = [{
@@ -15,6 +16,32 @@ const approveAbi = [{
 }] as const;
 const maxUint256 = (1n << 256n) - 1n;
 const isHexData = (value: string): boolean => /^0x(?:[0-9a-fA-F]{2})+$/.test(value);
+
+export function hasExactMainnetAllowance(currentAllowance: unknown, requiredAmount: string): boolean {
+  return typeof currentAllowance === 'bigint' && currentAllowance >= 0n
+    && /^\d+$/.test(requiredAmount) && currentAllowance === BigInt(requiredAmount);
+}
+
+export function isSamePersistedMainnetPreparation(
+  original: MainnetApprovalPreparation,
+  refreshed: MainnetApprovalPreparation,
+): boolean {
+  return refreshed.preparationId === original.preparationId
+    && refreshed.preparationHash === original.preparationHash
+    && refreshed.invoiceId === original.invoiceId
+    && refreshed.buyer.toLowerCase() === original.buyer.toLowerCase()
+    && refreshed.merchant.toLowerCase() === original.merchant.toLowerCase()
+    && refreshed.chainId === original.chainId
+    && refreshed.token.toLowerCase() === original.token.toLowerCase()
+    && refreshed.outputToken.toLowerCase() === original.outputToken.toLowerCase()
+    && refreshed.spender.toLowerCase() === original.spender.toLowerCase()
+    && refreshed.amount === original.amount
+    && refreshed.minimumReceive === original.minimumReceive
+    && refreshed.attributedApprovalCalldata === original.attributedApprovalCalldata
+    && refreshed.dataSuffix === original.dataSuffix
+    && refreshed.builderCode === original.builderCode
+    && refreshed.expiresAt === original.expiresAt;
+}
 
 export function validatePreparedMainnetApproval(
   preparation: MainnetApprovalPreparation,
@@ -27,8 +54,12 @@ export function validatePreparedMainnetApproval(
   if (preparation.invoiceId !== invoice.id) return 'The approval preparation belongs to a different invoice.';
   if (preparation.buyer.toLowerCase() !== connectedBuyer.toLowerCase()) return 'The connected wallet does not match the prepared buyer.';
   if (!isAddress(invoice.merchantAddress) || preparation.merchant.toLowerCase() !== invoice.merchantAddress.toLowerCase()) return 'The prepared merchant does not match this invoice.';
-  if (!isAddress(preparation.token) || preparation.token.toLowerCase() !== VERIFIED_MAINNET_WNVDA_ADDRESS.toLowerCase()
-    || preparation.token.toLowerCase() !== mainnetNetworkConfig.wNvdaAddress.toLowerCase()) return 'The preparation does not use configured mainnet wNVDAx.';
+  const supportedAsset = [
+    { address: VERIFIED_MAINNET_WNVDA_ADDRESS, configuredAddress: mainnetNetworkConfig.wNvdaAddress },
+    { address: VERIFIED_MAINNET_WAAPL_ADDRESS, configuredAddress: mainnetNetworkConfig.wAaplAddress },
+  ].find((asset) => preparation.token.toLowerCase() === asset.address.toLowerCase()
+    && preparation.token.toLowerCase() === asset.configuredAddress.toLowerCase());
+  if (!isAddress(preparation.token) || !supportedAsset) return 'The preparation does not use a configured supported Mainnet xStock.';
   if (!isAddress(preparation.outputToken) || preparation.outputToken.toLowerCase() !== VERIFIED_MAINNET_USDT0_ADDRESS.toLowerCase()
     || preparation.outputToken.toLowerCase() !== mainnetNetworkConfig.usdt0Address.toLowerCase()) return 'The preparation does not use official mainnet USD₮0.';
   if (!isAddress(preparation.spender)) return 'The prepared approval spender is invalid.';

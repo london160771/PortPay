@@ -75,6 +75,8 @@ export type MainnetApprovalPreparation = {
   handoffMessage?: string;
 };
 
+export type MainnetAssetKey = 'wNvda' | 'wAapl';
+
 export type MainnetApprovalPreparationResponse = {
   status: string;
   reason: string;
@@ -212,10 +214,12 @@ export function createSettlementQuote(
 export function prepareMainnetApproval(
   invoiceId: string,
   buyerAddress: string,
+  assetKey: MainnetAssetKey = 'wNvda',
+  preparationId?: string,
 ): Promise<MainnetApprovalPreparationResponse> {
   return request<MainnetApprovalPreparationResponse>(`/api/invoices/${encodeURIComponent(invoiceId)}/mainnet/approval-preparation`, {
     method: 'POST',
-    body: JSON.stringify({ buyerAddress }),
+    body: JSON.stringify({ buyerAddress, assetKey, ...(preparationId ? { preparationId } : {}) }),
   });
 }
 

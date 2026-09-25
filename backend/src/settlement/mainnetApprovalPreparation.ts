@@ -1,10 +1,13 @@
 import { decodeFunctionData, parseUnits, type Address, type Hex } from 'viem';
 import type { Invoice } from '../invoices/types.js';
-import { mainnetAddressConfig, mainnetSupportedAssets, VERIFIED_TESTNET_BUILDER_CODE } from '../config/xlayerMainnet.js';
+import { mainnetAddressConfig, mainnetSupportedAssets, VERIFIED_TESTNET_BUILDER_CODE, type MainnetAssetKey } from '../config/xlayerMainnet.js';
 import { OkxDexApiClient } from './okxDexApi.js';
 import {
   MAINNET_MAX_SLIPPAGE_PERCENT,
   OKXDEXMainnetAdapter,
+  grossAmountForMinimum,
+  minimumAfterSlippage,
+  MainnetPreparationError,
   type MainnetQuote,
   type PreparedMainnetTransaction,
 } from './mainnet.js';
@@ -19,9 +22,14 @@ import {
   runMainnetPreflight,
   type MainnetPreflightResult,
 } from './mainnetPreflight.js';
+import { createMainnetPaymentService, type MainnetReadinessRecheck } from './mainnetPayment.js';
 
-export const MAINNET_APPROVAL_PROOF_INPUT = '4800000000000000';
 export const MAINNET_APPROVAL_PROOF_SLIPPAGE_PERCENT = MAINNET_MAX_SLIPPAGE_PERCENT;
+export const MAINNET_TOTAL_QUOTE_BUDGET = 5;
+export const MAINNET_FINAL_VALIDATION_QUOTE_COUNT = 1;
+export const MAINNET_SIZING_MAX_QUOTES = MAINNET_TOTAL_QUOTE_BUDGET - MAINNET_FINAL_VALIDATION_QUOTE_COUNT;
+const INITIAL_SIZING_INPUT = 10n ** 18n;
+const MAX_UINT256 = (1n << 256n) - 1n;
 
 const approvalAbi = [{
   type: 'function', name: 'approve', stateMutability: 'nonpayable',
@@ -67,12 +75,14 @@ export type MainnetApprovalPreparationResult = {
 export type MainnetApprovalPreparationService = (
   invoice: Invoice,
   buyerAddress: Address,
+  request?: { assetKey?: MainnetAssetKey; preparationId?: string },
 ) => Promise<MainnetApprovalPreparationResult>;
 
 export type MainnetApprovalPreparationDependencies = {
   createAdapter?: () => OKXDEXMainnetAdapter;
   createRepository?: () => MainnetReconciliationRepository;
   preflight?: typeof runMainnetPreflight;
+  recheckPersistedPreparation?: (invoice: Invoice, preparationId: string, buyerAddress: Address) => Promise<MainnetReadinessRecheck>;
   now?: () => Date;
 };
 
@@ -123,20 +133,31 @@ function isExactApproval(evidence: MainnetPreparationEvidence, invoice: Invoice,
   let invoiceAmount: string;
   try { invoiceAmount = parseUnits(invoice.amountUsdt0, 6).toString(); }
   catch { return false; }
+  const supportedAsset = mainnetSupportedAssets.find((asset) => asset.key === evidence.quote.assetKey
+    && asset.address.toLowerCase() === evidence.inputToken.toLowerCase());
+  let requiredInput: bigint;
+  try {
+    if (!/^\d+$/.test(evidence.exactInputAmount)) return false;
+    requiredInput = BigInt(evidence.exactInputAmount);
+  } catch { return false; }
   if (!approval.attributedData || !approval.dataSuffix || !approval.builderCode
     || evidence.invoiceId !== invoice.id
     || evidence.buyer.toLowerCase() !== buyer.toLowerCase()
     || evidence.merchant.toLowerCase() !== invoice.merchantAddress.toLowerCase()
     || evidence.chainId !== 196
-    || evidence.inputToken.toLowerCase() !== mainnetSupportedAssets.find((asset) => asset.key === 'wNvda')?.address.toLowerCase()
+    || !supportedAsset || evidence.quote.invoiceId !== invoice.id || evidence.quote.chainId !== 196
+    || evidence.quote.assetAmount !== evidence.exactInputAmount || evidence.quote.assetKey !== supportedAsset.key
+    || evidence.quote.asset.toLowerCase() !== evidence.inputToken.toLowerCase()
+    || evidence.quote.buyer.toLowerCase() !== buyer.toLowerCase()
+    || evidence.quote.merchant.toLowerCase() !== invoice.merchantAddress.toLowerCase()
     || evidence.outputToken.toLowerCase() !== mainnetAddressConfig.usdt0.toLowerCase()
-    || evidence.exactInputAmount !== MAINNET_APPROVAL_PROOF_INPUT
+    || requiredInput <= 0n || requiredInput === MAX_UINT256
     || evidence.stablecoinInvoiceAmount !== invoiceAmount
     || BigInt(evidence.minimumReceive) < BigInt(evidence.stablecoinInvoiceAmount)
     || approval.kind !== 'approval' || approval.chainId !== 196 || approval.value !== 0n
     || approval.from.toLowerCase() !== buyer.toLowerCase()
     || approval.to.toLowerCase() !== evidence.inputToken.toLowerCase()
-    || approval.amount !== MAINNET_APPROVAL_PROOF_INPUT
+    || approval.amount !== evidence.exactInputAmount
     || approval.attributedData !== evidence.attributedApprovalCalldata
     || evidence.builderCode !== expectedBuilderCode
     || evidence.builderCode === VERIFIED_TESTNET_BUILDER_CODE
@@ -147,19 +168,66 @@ function isExactApproval(evidence: MainnetPreparationEvidence, invoice: Invoice,
     return decoded.functionName === 'approve'
       && typeof decoded.args[0] === 'string'
       && decoded.args[0].toLowerCase() === evidence.spender.toLowerCase()
-      && decoded.args[1] === BigInt(MAINNET_APPROVAL_PROOF_INPUT);
+      && decoded.args[1] === requiredInput;
   } catch {
     return false;
   }
+}
+
+async function sizeExactInInput(
+  adapter: OKXDEXMainnetAdapter,
+  invoice: Invoice,
+  buyerAddress: Address,
+  assetKey: MainnetAssetKey,
+): Promise<string> {
+  const invoiceAmount = parseUnits(invoice.amountUsdt0, 6);
+  if (invoiceAmount <= 0n) throw new MainnetPreparationError('Invoice amount must be positive before Mainnet quote sizing.');
+  const targetExpected = grossAmountForMinimum(invoiceAmount.toString(), MAINNET_APPROVAL_PROOF_SLIPPAGE_PERCENT);
+  const acceptableMaximum = targetExpected + targetExpected / 100n;
+  let inputAmount = INITIAL_SIZING_INPUT;
+
+  for (let attempt = 0; attempt < MAINNET_SIZING_MAX_QUOTES; attempt += 1) {
+    if (inputAmount <= 0n || inputAmount > MAX_UINT256) {
+      throw new MainnetPreparationError('Invoice quote sizing produced an invalid xStock input amount.');
+    }
+    const quote = await adapter.getSizingQuote({
+      assetAmount: inputAmount.toString(), assetKey, buyerAddress, invoice,
+      slippagePercent: MAINNET_APPROVAL_PROOF_SLIPPAGE_PERCENT,
+    });
+    if (!/^\d+$/.test(quote.expectedOutputAmount) || BigInt(quote.expectedOutputAmount) <= 0n
+      || !/^\d+$/.test(quote.protectedOutputAmount)) {
+      throw new MainnetPreparationError('OKX returned malformed output during bounded invoice sizing.');
+    }
+    const expectedOutput = BigInt(quote.expectedOutputAmount);
+    const protectedOutput = BigInt(quote.protectedOutputAmount);
+    if (protectedOutput !== minimumAfterSlippage(quote.expectedOutputAmount, MAINNET_APPROVAL_PROOF_SLIPPAGE_PERCENT)) {
+      throw new MainnetPreparationError('OKX sizing quote returned an inconsistent protected output.');
+    }
+    if (protectedOutput >= invoiceAmount && expectedOutput <= acceptableMaximum) return inputAmount.toString();
+
+    const nextInput = (inputAmount * targetExpected + expectedOutput - 1n) / expectedOutput;
+    if (nextInput === inputAmount) {
+      if (expectedOutput < targetExpected) inputAmount += 1n;
+      else throw new MainnetPreparationError('Invoice sizing could not converge within the bounded exact-in quote budget.');
+    } else {
+      inputAmount = nextInput;
+    }
+  }
+  throw new MainnetPreparationError(`Could not find an exact-in ${assetKey} amount whose protected output covers this invoice within ${MAINNET_SIZING_MAX_QUOTES} bounded sizing quote requests. No final validation quote or swap preparation was created; refresh later or use a smaller invoice.`);
 }
 
 export function createMainnetApprovalPreparationService(dependencies: MainnetApprovalPreparationDependencies = {}): MainnetApprovalPreparationService {
   const createAdapter = dependencies.createAdapter ?? (() => new OKXDEXMainnetAdapter({ apiClient: new OkxDexApiClient() }));
   const createRepository = dependencies.createRepository ?? createMainnetReconciliationRepository;
   const preflight = dependencies.preflight ?? runMainnetPreflight;
+  const defaultPaymentService = dependencies.recheckPersistedPreparation ? undefined : createMainnetPaymentService();
+  const recheckPersistedPreparation = dependencies.recheckPersistedPreparation
+    ?? ((invoice: Invoice, preparationId: string, buyerAddress: Address) => defaultPaymentService!.recheck(
+      invoice, preparationId, buyerAddress, undefined, { preflightOnly: true },
+    ));
   const now = dependencies.now ?? (() => new Date());
 
-  return async (invoice, buyerAddress) => {
+  return async (invoice, buyerAddress, request = {}) => {
     const repository = createRepository();
     const handoff = await repository.getHandoffForInvoice(invoice.id);
     if (handoff) {
@@ -190,15 +258,51 @@ export function createMainnetApprovalPreparationService(dependencies: MainnetApp
         },
       };
     }
+
+    const assetKey = request.assetKey ?? 'wNvda';
+    if (!mainnetSupportedAssets.some((asset) => asset.key === assetKey)) {
+      return { status: 'INVALID_ROUTE', reason: 'Choose one of PortPay’s configured Mainnet xStock assets.' };
+    }
+
+    if (request.preparationId) {
+      const evidence = await repository.getPreparation(request.preparationId);
+      if (!evidence || !isExactApproval(evidence, invoice, buyerAddress, evidence.builderCode)
+        || evidence.quote.assetKey !== assetKey || Date.parse(evidence.expiresAt) <= now().getTime()) {
+        return { status: 'BLOCKED', reason: 'The existing invoice preparation is missing, stale, or does not match the selected asset and buyer.' };
+      }
+      const recheck = await recheckPersistedPreparation(invoice, evidence.id, buyerAddress);
+      if (recheck.status === 'PREFLIGHT_PASSED' && recheck.ready === false
+        && recheck.preparationId === evidence.id && recheck.preparationHash === evidence.preparationHash) {
+        return {
+          status: 'READY', reason: recheck.reason,
+          preparation: approvalPreparationFromEvidence(evidence, evidence.exactInputAmount, mainnetHandoffAuthorizationMessage(evidence)),
+        };
+      }
+      if (recheck.status === 'INSUFFICIENT_ALLOWANCE') {
+        return {
+          status: 'APPROVAL_REQUIRED', reason: recheck.reason,
+          preparation: approvalPreparationFromEvidence(evidence, '0'),
+        };
+      }
+      return { status: recheck.status === 'PREFLIGHT_PASSED' ? 'BLOCKED' : recheck.status, reason: recheck.reason };
+    }
+
     const adapter = createAdapter();
-    const quote: MainnetQuote = await adapter.getQuote({
-      assetAmount: MAINNET_APPROVAL_PROOF_INPUT,
-      assetKey: 'wNvda',
-      buyerAddress,
-      invoice,
-      slippagePercent: MAINNET_APPROVAL_PROOF_SLIPPAGE_PERCENT,
-    });
-    const approval: PreparedMainnetTransaction = await adapter.prepareApprovalTransaction(quote);
+    let assetAmount: string;
+    try { assetAmount = await sizeExactInInput(adapter, invoice, buyerAddress, assetKey); }
+    catch (error) {
+      return { status: 'INVALID_ROUTE', reason: error instanceof Error ? error.message : 'Could not safely size the invoice against the selected asset.' };
+    }
+    let quote: MainnetQuote;
+    let approval: PreparedMainnetTransaction;
+    try {
+      quote = await adapter.getQuote({
+        assetAmount, assetKey, buyerAddress, invoice, slippagePercent: MAINNET_APPROVAL_PROOF_SLIPPAGE_PERCENT,
+      });
+      approval = await adapter.prepareApprovalTransaction(quote);
+    } catch (error) {
+      return { status: 'INVALID_ROUTE', reason: error instanceof Error ? error.message : 'The final exact-in quote or approval preparation could not cover this invoice.' };
+    }
     const result = await preflight({
       adapter,
       invoice,
@@ -209,7 +313,7 @@ export function createMainnetApprovalPreparationService(dependencies: MainnetApp
     });
 
     const allowanceIsExact = result.balances
-      && BigInt(result.balances.allowance) === BigInt(MAINNET_APPROVAL_PROOF_INPUT);
+      && BigInt(result.balances.allowance) === BigInt(quote.assetAmount);
     const approvalRequired = result.status === 'APPROVAL_REQUIRED' && !result.ready
       && result.simulations?.stage === 'approval'
       && result.simulations.approval === 'passed'
@@ -230,7 +334,7 @@ export function createMainnetApprovalPreparationService(dependencies: MainnetApp
       || !result.balances
       || result.balances.assetDecimals !== 18
       || result.balances.stablecoinDecimals !== 6
-      || result.balances.assetAddress.toLowerCase() !== mainnetSupportedAssets.find((asset) => asset.key === 'wNvda')?.address.toLowerCase()
+      || result.balances.assetAddress.toLowerCase() !== quote.asset.toLowerCase()
       || result.balances.stablecoinAddress.toLowerCase() !== mainnetAddressConfig.usdt0.toLowerCase()
       || result.balances.buyerAddress.toLowerCase() !== buyerAddress.toLowerCase()) {
       return result.status === 'READY'

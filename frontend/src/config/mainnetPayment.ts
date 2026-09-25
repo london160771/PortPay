@@ -1,22 +1,29 @@
 import { isAddress, isHex, type Address } from 'viem';
 import type { Invoice, MainnetApprovalPreparation, MainnetReadinessRecheckResponse, MainnetSubmissionResponse } from './api';
-import { validatePreparedMainnetApproval } from './mainnetApproval';
+import { hasExactMainnetAllowance, validatePreparedMainnetApproval } from './mainnetApproval';
 
 export type MainnetSubmissionRecovery = Pick<MainnetSubmissionResponse, 'preparationId' | 'handoffId' | 'transactionHash'> & {
   invoiceId: string;
   buyerAddress: Address;
 };
 
-export const MAINNET_TARGET_PREPARATION_WINDOW_MS = 120_000;
 export const MAINNET_PRE_PROMPT_MIN_REMAINING_MS = 30_000;
 
 export function mainnetPreparationNeedsRefresh(
   expiresAt: string,
   nowMs = Date.now(),
-  minimumRemainingMs = MAINNET_TARGET_PREPARATION_WINDOW_MS,
+  minimumRemainingMs = MAINNET_PRE_PROMPT_MIN_REMAINING_MS,
 ): boolean {
   const expiry = Date.parse(expiresAt);
   return !Number.isFinite(expiry) || expiry - nowMs < minimumRemainingMs;
+}
+
+export function readyMainnetPreparationNeedsRefresh(
+  result: { status: string; preparation?: MainnetApprovalPreparation; existingPayment?: unknown } | null,
+  nowMs = Date.now(),
+): boolean {
+  return result?.status === 'READY' && !result.existingPayment && Boolean(result.preparation)
+    && mainnetPreparationNeedsRefresh(result.preparation!.expiresAt, nowMs, MAINNET_PRE_PROMPT_MIN_REMAINING_MS);
 }
 
 export function validateMainnetPrePromptReadiness(
@@ -51,9 +58,12 @@ export function canOfferMainnetPay(
   chainId: number | undefined,
   nowMs = Date.now(),
 ): boolean {
-  return Boolean(result?.status === 'READY' && !result.existingPayment && result.preparation && buyer
-    && result.preparation.handoffMessage?.startsWith('PortPay Mainnet Pay authorization\nChain ID: 196\n')
-    && validatePreparedMainnetApproval(result.preparation, invoice, buyer, chainId, nowMs) === null);
+  const preparation = result?.preparation;
+  return Boolean(result?.status === 'READY' && !readyMainnetPreparationNeedsRefresh(result, nowMs)
+    && !result.existingPayment && preparation && buyer
+    && preparation.handoffMessage?.startsWith('PortPay Mainnet Pay authorization\nChain ID: 196\n')
+    && validatePreparedMainnetApproval(preparation, invoice, buyer, chainId, nowMs) === null
+    && hasExactMainnetAllowance(BigInt(preparation.snapshotAllowance), preparation.amount));
 }
 
 export function readMainnetSubmissionRecovery(invoiceId: string): MainnetSubmissionRecovery | null {

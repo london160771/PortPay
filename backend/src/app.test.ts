@@ -78,10 +78,12 @@ describe('backend routes', () => {
     const repository = new InMemoryInvoiceRepository();
     await repository.create(invoice);
     let requestedBuyer = '';
+    let preparationRequest: unknown;
     const app = createApp(repository, undefined, {
-      mainnetApprovalPreparation: async (requestedInvoice, buyerAddress) => {
+      mainnetApprovalPreparation: async (requestedInvoice, buyerAddress, request) => {
         expect(requestedInvoice.id).toBe(invoice.id);
         requestedBuyer = buyerAddress;
+        preparationRequest = request;
         return { status: 'APPROVAL_REQUIRED', reason: 'Exact approval simulated.' };
       },
     });
@@ -89,13 +91,14 @@ describe('backend routes', () => {
     await withServer(app, async (baseUrl) => {
       const response = await fetch(`${baseUrl}/api/invoices/${invoice.id}/mainnet/approval-preparation`, {
         method: 'POST', headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ buyerAddress: '0xbabdfef588cf57efcc7c8857960e3ccdd9167589' }),
+        body: JSON.stringify({ buyerAddress: '0xbabdfef588cf57efcc7c8857960e3ccdd9167589', assetKey: 'wAapl', preparationId: '00000000-0000-4000-8000-000000000002' }),
       });
       expect(response.status).toBe(200);
       expect(await response.json()).toMatchObject({ status: 'APPROVAL_REQUIRED', reason: 'Exact approval simulated.' });
     });
 
     expect(requestedBuyer.toLowerCase()).toBe('0xbabdfef588cf57efcc7c8857960e3ccdd9167589');
+    expect(preparationRequest).toEqual({ assetKey: 'wAapl', preparationId: '00000000-0000-4000-8000-000000000002' });
   });
 
   it('recovers only the server-recorded submission for the supplied invoice, preparation, and buyer', async () => {

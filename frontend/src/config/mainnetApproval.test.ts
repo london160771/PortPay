@@ -2,8 +2,8 @@ import { encodeFunctionData, type Address, type Hex } from 'viem';
 import { describe, expect, it } from 'vitest';
 import type { Invoice, MainnetApprovalPreparation } from './api';
 import { toBuilderCodeDataSuffix, VERIFIED_TESTNET_BUILDER_CODE } from './builderCodes';
-import { mainnetNetworkConfig } from './network';
-import { validatePreparedMainnetApproval } from './mainnetApproval';
+import { mainnetNetworkConfig, VERIFIED_MAINNET_WAAPL_ADDRESS } from './network';
+import { hasExactMainnetAllowance, isSamePersistedMainnetPreparation, validatePreparedMainnetApproval } from './mainnetApproval';
 
 const buyer = '0xbabdfef588cf57efcc7c8857960e3ccdd9167589' as Address;
 const merchant = '0x815c2fb8178f0bf80ada8c5b97ff44ece90e6e25' as Address;
@@ -36,6 +36,26 @@ function prepared(overrides: Partial<MainnetApprovalPreparation> = {}): MainnetA
 describe('Mainnet buyer approval preparation guard', () => {
   it('accepts the exact backend-prepared mainnet approval for the bound buyer and invoice', () => {
     expect(validatePreparedMainnetApproval(prepared(), invoice, buyer, 196, Date.parse('2026-09-23T00:30:00.000Z'))).toBeNull();
+  });
+
+  it('accepts either configured Mainnet xStock and requires an exact allowance value', () => {
+    const value = prepared({ token: VERIFIED_MAINNET_WAAPL_ADDRESS as Address });
+    expect(validatePreparedMainnetApproval(value, invoice, buyer, 196, Date.parse('2026-09-23T00:30:00.000Z'))).toBeNull();
+    expect(hasExactMainnetAllowance(BigInt(amount), amount)).toBe(true);
+    expect(hasExactMainnetAllowance(BigInt(amount) - 1n, amount)).toBe(false);
+    expect(hasExactMainnetAllowance(BigInt(amount) + 1n, amount)).toBe(false);
+    expect(hasExactMainnetAllowance(((1n << 256n) - 1n), amount)).toBe(false);
+  });
+
+  it('recognizes only the identical immutable approval preparation after the allowance step', () => {
+    const original = prepared();
+    expect(isSamePersistedMainnetPreparation(original, prepared())).toBe(true);
+    expect(isSamePersistedMainnetPreparation(original, prepared({ preparationId: '00000000-0000-4000-8000-000000000003' }))).toBe(false);
+    expect(isSamePersistedMainnetPreparation(original, prepared({ amount: '5000000000000000' }))).toBe(false);
+    expect(isSamePersistedMainnetPreparation(original, prepared({ minimumReceive: '1100000' }))).toBe(false);
+    expect(isSamePersistedMainnetPreparation(original, prepared({ spender: '0x1111111111111111111111111111111111111111' as Address }))).toBe(false);
+    expect(isSamePersistedMainnetPreparation(original, prepared({ preparationHash: `0x${'b'.repeat(64)}` as Hex }))).toBe(false);
+    expect(isSamePersistedMainnetPreparation(original, prepared({ attributedApprovalCalldata: `${original.approvalCalldata}00` as Hex }))).toBe(false);
   });
 
   it.each([

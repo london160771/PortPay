@@ -413,9 +413,16 @@ function parseSlippageBasisPoints(value: string): bigint {
   return tenThousandthsPercent;
 }
 
-function minimumAfterSlippage(amount: string, slippagePercent: string): bigint {
+export function minimumAfterSlippage(amount: string, slippagePercent: string): bigint {
   const slippage = parseSlippageBasisPoints(slippagePercent);
   return BigInt(amount) * (1_000_000n - slippage) / 1_000_000n;
+}
+
+export function grossAmountForMinimum(minimumAmount: string, slippagePercent: string): bigint {
+  const slippage = parseSlippageBasisPoints(slippagePercent);
+  const protectedShare = 1_000_000n - slippage;
+  const numerator = BigInt(positiveInteger(minimumAmount, 'Minimum output')) * 1_000_000n;
+  return (numerator + protectedShare - 1n) / protectedShare;
 }
 
 function packedAddress(value: bigint): Address {
@@ -472,6 +479,25 @@ export class OKXDEXMainnetAdapter {
 
   getBuilderCode(): string | undefined {
     return this.builderCode;
+  }
+
+  async getSizingQuote(request: MainnetQuoteRequest): Promise<{ expectedOutputAmount: string; protectedOutputAmount: string }> {
+    if (request.invoice.status !== 'pending') throw new MainnetPreparationError('Only pending invoices can be sized.');
+    const asset = this.assetAddress(request.assetKey);
+    positiveInteger(request.assetAmount, 'Asset amount');
+    const slippagePercent = request.slippagePercent ?? MAINNET_MAX_SLIPPAGE_PERCENT;
+    parseSlippageBasisPoints(slippagePercent);
+    const raw = await this.apiClient.getQuote({
+      amount: request.assetAmount,
+      fromTokenAddress: asset,
+      toTokenAddress: mainnetAddressConfig.usdt0,
+    });
+    const stablecoin = normalizeAddress(mainnetAddressConfig.usdt0, 'Mainnet USD₮0');
+    this.validateQuoteResponse(raw, asset, stablecoin, request.assetAmount);
+    return {
+      expectedOutputAmount: raw.toTokenAmount,
+      protectedOutputAmount: minimumAfterSlippage(raw.toTokenAmount, slippagePercent).toString(),
+    };
   }
 
   async getQuote(request: MainnetQuoteRequest): Promise<MainnetQuote> {

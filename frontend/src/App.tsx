@@ -30,6 +30,7 @@ import {
   type Invoice,
   type MainnetApprovalPreparation,
   type MainnetApprovalPreparationResponse,
+  type MainnetAssetKey,
   type MainnetSubmissionResponse,
   type SettlementQuote,
 } from './config/api';
@@ -65,11 +66,12 @@ import {
   portPayBuilderCode,
   readBuilderCodePayoutAddress,
 } from './config/builderCodes';
-import { validatePreparedMainnetApproval } from './config/mainnetApproval';
+import { hasExactMainnetAllowance, isSamePersistedMainnetPreparation, validatePreparedMainnetApproval } from './config/mainnetApproval';
 import {
   canOfferMainnetPay,
   clearMainnetSubmissionRecovery,
   mainnetPreparationNeedsRefresh,
+  readyMainnetPreparationNeedsRefresh,
   MAINNET_PRE_PROMPT_MIN_REMAINING_MS,
   readMainnetSubmissionRecovery,
   saveMainnetSubmissionRecovery,
@@ -1242,14 +1244,17 @@ function MainnetApprovalPanel({ invoice, onPaid }: { invoice: Invoice; onPaid: (
   );
   const [isPreparing, setIsPreparing] = useState(false);
   const [preparationError, setPreparationError] = useState('');
-  const [payStage, setPayStage] = useState<'idle' | 'rechecking' | 'wallet' | 'observing' | 'confirming' | 'error' | 'unresolved'>('idle');
+  const [selectedAssetKey, setSelectedAssetKey] = useState<MainnetAssetKey>('wNvda');
+  const [approvalTransactionHash, setApprovalTransactionHash] = useState<`0x${string}` | null>(null);
+  const [approvalConfirmed, setApprovalConfirmed] = useState(false);
+  const [payStage, setPayStage] = useState<'idle' | 'awaiting-approval' | 'confirming-approval' | 'rechecking' | 'wallet' | 'observing' | 'confirming' | 'error' | 'unresolved'>('idle');
   const [payError, setPayError] = useState('');
   const [transactionHash, setTransactionHash] = useState<`0x${string}` | null>(submissionRecovery?.transactionHash ?? null);
   const preparationReachedReady = useRef(Boolean(submissionRecovery));
   const recoveryAttempted = useRef<string | null>(null);
-  const justInTimePreparationId = useRef<string | null>(null);
 
-  const isPaying = payStage === 'rechecking' || payStage === 'wallet' || payStage === 'observing' || payStage === 'confirming';
+  const isPaying = ['awaiting-approval', 'confirming-approval', 'rechecking', 'wallet', 'observing', 'confirming'].includes(payStage);
+  const selectedAsset = selectedAssetKey === 'wNvda' ? mainnetAssets.wNvda : mainnetAssets.wAapl;
 
   const acceptPreparationResult = useCallback((result: MainnetApprovalPreparationResponse) => {
     setPreflight(result);
@@ -1338,16 +1343,18 @@ function MainnetApprovalPanel({ invoice, onPaid }: { invoice: Invoice; onPaid: (
     void observeSameMainnetTransaction(submissionRecovery, true);
   }, [address, chainId, invoice.id, isConnected, observeSameMainnetTransaction, submissionRecovery]);
 
-  async function refreshPreparation(force = false): Promise<MainnetApprovalPreparationResponse | null> {
-    if ((!force && preparationReachedReady.current) || !address || chainId !== xLayerMainnet.id || invoice.status !== 'pending') return null;
-    if (force) {
-      preparationReachedReady.current = false;
-      setPreflight(null);
-    }
+  async function refreshPreparation(): Promise<MainnetApprovalPreparationResponse | null> {
+    if ((preparationReachedReady.current && !readyMainnetPreparationNeedsRefresh(preflight))
+      || !address || chainId !== xLayerMainnet.id || invoice.status !== 'pending') return null;
+    preparationReachedReady.current = false;
+    setPreflight(null);
+    setApprovalTransactionHash(null);
+    setApprovalConfirmed(false);
+    setPayError('');
     setIsPreparing(true);
     setPreparationError('');
     try {
-      const result = await prepareMainnetApproval(invoice.id, address);
+      const result = await prepareMainnetApproval(invoice.id, address, selectedAssetKey);
       acceptPreparationResult(result);
       return result;
     } catch (error) {
@@ -1369,7 +1376,7 @@ function MainnetApprovalPanel({ invoice, onPaid }: { invoice: Invoice; onPaid: (
     }
     setIsPreparing(true);
     setPreparationError('');
-    prepareMainnetApproval(invoice.id, address)
+    prepareMainnetApproval(invoice.id, address, selectedAssetKey)
       .then((result) => {
         if (active) {
           acceptPreparationResult(result);
@@ -1383,16 +1390,93 @@ function MainnetApprovalPanel({ invoice, onPaid }: { invoice: Invoice; onPaid: (
       })
       .finally(() => { if (active) setIsPreparing(false); });
     return () => { active = false; };
-  }, [acceptPreparationResult, address, chainId, invoice.id, invoice.status, isConnected]);
+  }, [acceptPreparationResult, address, chainId, invoice.id, invoice.status, isConnected, selectedAssetKey]);
+
+  async function approvePreparedMainnet() {
+    const preparation = preflight?.preparation;
+    const validationError = preparation && address
+      ? validatePreparedMainnetApproval(preparation, invoice, address, chainId)
+      : 'A fresh preparation for the connected buyer is required.';
+    const selectedAssetError = preparation && preparation.token.toLowerCase() !== selectedAsset.address.toLowerCase()
+      ? 'The persisted preparation does not match the xStock selected for this checkout.'
+      : null;
+    if (!preparation || preflight.status !== 'APPROVAL_REQUIRED' || !address || !publicClient
+      || chainId !== 196 || invoice.status !== 'pending' || validationError || selectedAssetError) {
+      setPayError(validationError || selectedAssetError || 'A fresh exact Mainnet approval preparation is required.');
+      setPayStage('error');
+      return;
+    }
+    setPayError('');
+    setPayStage('awaiting-approval');
+    try {
+      if (await publicClient.getChainId() !== 196) throw new Error('The X Layer Mainnet RPC must report chain 196 before approval.');
+      const currentAllowance = await publicClient.readContract({
+        address: preparation.token,
+        abi: erc20BalanceAbi,
+        functionName: 'allowance',
+        args: [address, preparation.spender],
+      });
+      if (typeof currentAllowance !== 'bigint' || currentAllowance < 0n) throw new Error('Could not verify the current onchain allowance.');
+      if (!hasExactMainnetAllowance(currentAllowance, preparation.amount)) {
+        const approvalHash = await sendTransactionAsync({
+          account: address,
+          to: preparation.token,
+          data: preparation.attributedApprovalCalldata,
+          value: 0n,
+          chainId: 196,
+        });
+        setApprovalTransactionHash(approvalHash);
+        setPayStage('confirming-approval');
+        const receipt = await publicClient.waitForTransactionReceipt({ hash: approvalHash });
+        if (receipt.status !== 'success') throw new Error('The exact Mainnet token approval did not succeed.');
+      }
+
+      const confirmedAllowance = await publicClient.readContract({
+        address: preparation.token,
+        abi: erc20BalanceAbi,
+        functionName: 'allowance',
+        args: [address, preparation.spender],
+      });
+      if (!hasExactMainnetAllowance(confirmedAllowance, preparation.amount)) {
+        throw new Error('Onchain allowance does not exactly equal the prepared invoice input; Pay remains unavailable.');
+      }
+      setApprovalConfirmed(true);
+      setPayStage('rechecking');
+      const result = await prepareMainnetApproval(invoice.id, address, selectedAssetKey, preparation.preparationId);
+      if (result.status !== 'READY' || !result.preparation
+        || !isSamePersistedMainnetPreparation(preparation, result.preparation)) {
+        acceptPreparationResult(result);
+        throw new Error(result.reason || 'The same persisted preparation did not pass its post-approval readiness recheck.');
+      }
+      acceptPreparationResult(result);
+      setPayStage('idle');
+      setPayError('Exact approval confirmed. The same preparation is ready for a separate Pay action.');
+    } catch (error) {
+      setPayStage('error');
+      setPayError(error instanceof Error ? error.message : 'The exact token approval could not be completed.');
+    }
+  }
 
   async function payPreparedMainnet() {
+    const returnToPreparationStage = (reason: string) => {
+      preparationReachedReady.current = false;
+      setPreflight(null);
+      setPreparationError(reason);
+      setPayStage('idle');
+      setPayError('');
+    };
+
+    if (readyMainnetPreparationNeedsRefresh(preflight)) {
+      returnToPreparationStage('This READY preparation has less than 30 seconds remaining or has expired. Refresh it and review its exact amount and allowance before clicking Pay again. No wallet prompt or handoff was started.');
+      return;
+    }
     if (!preflight || !preflight.preparation) {
       setPayError('A fresh READY preparation and connected buyer wallet are required.');
       setPayStage('error');
       return;
     }
-    let preparation: MainnetApprovalPreparation = preflight.preparation;
-    let preparationResponse: MainnetApprovalPreparationResponse = preflight;
+    const preparation: MainnetApprovalPreparation = preflight.preparation;
+    const preparationResponse: MainnetApprovalPreparationResponse = preflight;
     if (!address || !publicClient || !preparation || preflight?.status !== 'READY'
       || preflight.existingPayment || invoice.status !== 'pending' || transactionHash) {
       setPayError('A fresh READY preparation and connected buyer wallet are required.');
@@ -1404,47 +1488,6 @@ function MainnetApprovalPanel({ invoice, onPaid }: { invoice: Invoice; onPaid: (
     let submittedHash: `0x${string}` | null = null;
     setPayError('');
     setPayStage('rechecking');
-
-    const refreshExpiredPreparation = async () => {
-      const refreshed = await refreshPreparation(true);
-      if (refreshed?.status === 'HANDOFF_UNRESOLVED') {
-        setPayStage('unresolved');
-        setPayError(refreshed.reason);
-      } else if (refreshed?.status === 'SUBMITTED') {
-        setPayStage('idle');
-        setPayError('An existing submitted payment was found. Resuming that transaction; no new payment will be prompted.');
-      } else if (refreshed?.status === 'READY') {
-        justInTimePreparationId.current = refreshed.preparation?.preparationId ?? null;
-        setPayStage('idle');
-        setPayError('The preparation expired or was too close to expiry. A fresh preparation is ready; review it and click Pay again.');
-      } else {
-        setPayStage('error');
-        setPayError('The preparation expired before handoff. No invoice attempt was consumed. Refresh or retry when the backend is available.');
-      }
-    };
-
-    const reprepareForCurrentPay = async (): Promise<boolean> => {
-      const refreshed = await refreshPreparation(true);
-      if (refreshed?.status === 'HANDOFF_UNRESOLVED') {
-        setPayStage('unresolved');
-        setPayError(refreshed.reason);
-        return false;
-      }
-      if (refreshed?.status === 'SUBMITTED') {
-        setPayStage('idle');
-        setPayError('An existing submitted payment was found. Resuming that transaction; no new payment will be prompted.');
-        return false;
-      }
-      if (refreshed?.status !== 'READY' || !refreshed.preparation
-        || !canOfferMainnetPay(refreshed, invoice, address, chainId)) {
-        setPayStage('error');
-        setPayError(refreshed?.reason || 'A fresh persisted Mainnet preparation is not READY. No wallet prompt was opened.');
-        return false;
-      }
-      preparation = refreshed.preparation;
-      preparationResponse = refreshed;
-      return true;
-    };
 
     const resumeSubmitted = async (result: Awaited<ReturnType<typeof recheckMainnetReadiness>>) => {
       if (!result.transactionHash || !/^0x[0-9a-fA-F]{64}$/.test(result.transactionHash)
@@ -1466,12 +1509,9 @@ function MainnetApprovalPanel({ invoice, onPaid }: { invoice: Invoice; onPaid: (
       const rpcChainId = await publicClient.getChainId();
       if (rpcChainId !== 196 || chainId !== 196) throw new Error('The connected wallet and X Layer RPC must both report chain 196.');
 
-      // Prefer a full two-minute PortPay window. If OKX embeds a shorter
-      // deadline, fetch a fresh persisted swap just-in-time before any wallet prompt.
-      const alreadyPreparedJustInTime = justInTimePreparationId.current === preparation.preparationId;
-      justInTimePreparationId.current = null;
-      if (!alreadyPreparedJustInTime && mainnetPreparationNeedsRefresh(preparation.expiresAt)) {
-        if (!await reprepareForCurrentPay()) return;
+      if (readyMainnetPreparationNeedsRefresh(preparationResponse)) {
+        returnToPreparationStage('This READY preparation no longer has 30 seconds remaining. Refresh it and review its exact amount and allowance before clicking Pay again. No handoff was created.');
+        return;
       }
       if (!canOfferMainnetPay(preparationResponse, invoice, address, chainId)) {
         throw new Error('The persisted preparation no longer matches this buyer, invoice, chain, or expiry. Refresh it before continuing.');
@@ -1479,10 +1519,6 @@ function MainnetApprovalPanel({ invoice, onPaid }: { invoice: Invoice; onPaid: (
       if (!preparation.handoffMessage) throw new Error('The server did not supply a buyer handoff authorization message.');
 
       // Finish the expensive, read-only validation before any wallet message prompt.
-      if (mainnetPreparationNeedsRefresh(preparation.expiresAt, Date.now(), MAINNET_PRE_PROMPT_MIN_REMAINING_MS)) {
-        await refreshExpiredPreparation();
-        return;
-      }
       const prePrompt = await preflightMainnetReadiness(invoice.id, preparation.preparationId, address);
       if (prePrompt.status === 'SUBMITTED') {
         await resumeSubmitted(prePrompt);
@@ -1495,13 +1531,13 @@ function MainnetApprovalPanel({ invoice, onPaid }: { invoice: Invoice; onPaid: (
         return;
       }
       if (prePrompt.status === 'EXPIRED') {
-        await refreshExpiredPreparation();
+        returnToPreparationStage('The READY preparation expired before handoff. Refresh it and review the new exact amount and allowance; no invoice attempt was consumed.');
         return;
       }
       const prePromptError = validateMainnetPrePromptReadiness(prePrompt, preparation, invoice, address, chainId);
       if (prePromptError) {
         if (mainnetPreparationNeedsRefresh(preparation.expiresAt, Date.now(), MAINNET_PRE_PROMPT_MIN_REMAINING_MS)) {
-          await refreshExpiredPreparation();
+          returnToPreparationStage('The READY preparation no longer has 30 seconds for a safe wallet handoff. Refresh it and review the new exact amount and allowance.');
           return;
         }
         throw new Error(prePromptError);
@@ -1510,7 +1546,7 @@ function MainnetApprovalPanel({ invoice, onPaid }: { invoice: Invoice; onPaid: (
       const buyerSignature = await signMessageAsync({ account: address, message: preparation.handoffMessage });
       const recheck = await recheckMainnetReadiness(invoice.id, preparation.preparationId, address, buyerSignature);
       if (recheck.status === 'EXPIRED') {
-        await refreshExpiredPreparation();
+        returnToPreparationStage('The preparation expired before a handoff was persisted. Refresh it and review the new exact amount and allowance; the invoice remains retryable.');
         return;
       }
       if (recheck.status === 'SUBMITTED') {
@@ -1572,20 +1608,46 @@ function MainnetApprovalPanel({ invoice, onPaid }: { invoice: Invoice; onPaid: (
   const explorerUrl = transactionHash ? `${mainnetNetworkConfig.explorerUrl}/tx/${transactionHash}` : '';
   const preparedValidationError = preflight?.preparation && address
     ? validatePreparedMainnetApproval(preflight.preparation, invoice, address, chainId)
+      ?? (preflight.preparation.token.toLowerCase() !== selectedAsset.address.toLowerCase()
+        ? 'The persisted preparation does not match the xStock selected for this checkout.' : null)
     : 'A fresh preparation for the connected buyer is required.';
+  const readyPreparationNeedsRefresh = readyMainnetPreparationNeedsRefresh(preflight);
   const showPayButton = preflight?.status === 'READY' && Boolean(preflight.preparation) && !preflight.existingPayment
     && invoice.status === 'pending' && Boolean(address) && chainId === xLayerMainnet.id
-    && !transactionHash && payStage === 'idle';
+    && !transactionHash && payStage === 'idle' && !readyPreparationNeedsRefresh;
 
   return (
     <section className="mainnet-payment-panel mt-5 rounded-2xl border border-ink/10 bg-cloud p-5">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-amber-800">Mainnet payment · manual wallet confirmation</p>
-          <p className="mt-1 text-sm leading-6 text-ink/65">PortPay rechecks the existing persisted transaction immediately before Pay. No additional approval or automatic send is used.</p>
+          <p className="mt-1 text-sm leading-6 text-ink/65">PortPay prepares the invoice-sized payment. Any exact approval and the separate Pay transaction require your wallet confirmation.</p>
         </div>
         <span className="payment-network-pill rounded-full bg-amber-100 px-3 py-1.5 text-[10px] font-bold uppercase tracking-[0.12em] text-amber-950">X Layer · 196</span>
       </div>
+
+      <label className="mt-4 block max-w-xs text-xs font-medium text-ink/65">
+        Choose the xStock to spend
+        <select
+          className="mt-1.5 block w-full rounded-lg border border-ink/15 bg-white px-3 py-2 text-sm text-ink"
+          value={selectedAssetKey}
+          disabled={isPaying || Boolean(preflight?.existingPayment) || Boolean(transactionHash)}
+          onChange={(event) => {
+            const next = event.target.value as MainnetAssetKey;
+            if (next === selectedAssetKey) return;
+            preparationReachedReady.current = false;
+            setPreflight(null);
+            setPreparationError('');
+            setPayError('');
+            setApprovalTransactionHash(null);
+            setApprovalConfirmed(false);
+            setSelectedAssetKey(next);
+          }}
+        >
+          <option value="wNvda">wNVDAx</option>
+          <option value="wAapl">wAAPLx</option>
+        </select>
+      </label>
 
       {!isConnected ? (
         <button type="button" className="portpay-button portpay-button--primary mt-5 rounded-xl bg-ink px-4 py-3 text-sm font-bold text-white disabled:opacity-50" onClick={() => connect({ connector: okxWalletConnector })} disabled={isConnecting}>
@@ -1605,22 +1667,31 @@ function MainnetApprovalPanel({ invoice, onPaid }: { invoice: Invoice; onPaid: (
           {preparationError ? <p className="rounded-xl border border-rose-200 bg-rose-50 p-4 text-sm text-rose-800">{preparationError}</p> : null}
           {preflight && !isPreparing ? (
             <div className="mainnet-preflight-card rounded-xl border border-ink/10 bg-white p-4">
-              <p className="text-sm font-semibold">{preflight.status === 'READY' ? 'Ready for final payment recheck' : preflight.status === 'HANDOFF_UNRESOLVED' ? 'Payment status unresolved' : preflight.status === 'SUBMITTED' ? 'Transaction submitted' : preflight.status === 'APPROVAL_REQUIRED' ? 'Existing exact allowance required' : 'Mainnet preflight blocked'}</p>
+              <p className="text-sm font-semibold">{preflight.status === 'READY' ? 'Ready for final payment recheck' : preflight.status === 'HANDOFF_UNRESOLVED' ? 'Payment status unresolved' : preflight.status === 'SUBMITTED' ? 'Transaction submitted' : preflight.status === 'APPROVAL_REQUIRED' ? 'Exact approval required' : 'Mainnet preflight blocked'}</p>
               <p className="mt-1 text-sm leading-6 text-ink/60">{preflight.reason}</p>
               {preflight.preparation && preparedValidationError ? <p className="mt-3 text-sm text-rose-700">{preparedValidationError}</p> : null}
               {preflight.preparation && !preparedValidationError ? (
                 <dl className="mt-4 grid gap-2 text-xs sm:grid-cols-2">
-                  <div><dt className="text-ink/45">Asset / exact amount</dt><dd className="mt-0.5 font-semibold">wNVDAx · {formatUnits(BigInt(preflight.preparation.amount), 18)}</dd></div>
+                  <div><dt className="text-ink/45">Asset / exact amount</dt><dd className="mt-0.5 font-semibold">{selectedAsset.label} · {formatUnits(BigInt(preflight.preparation.amount), 18)}</dd></div>
                   <div><dt className="text-ink/45">Minimum merchant receive</dt><dd className="mt-0.5 font-semibold">{formatUnits(BigInt(preflight.preparation.minimumReceive), 6)} USD₮0</dd></div>
                   <div><dt className="text-ink/45">Spender from prepared quote</dt><dd className="mt-0.5 break-all font-mono">{preflight.preparation.spender}</dd></div>
                   <div><dt className="text-ink/45">Preparation expires</dt><dd className="mt-0.5">{new Date(preflight.preparation.expiresAt).toLocaleTimeString()}</dd></div>
                   <div><dt className="text-ink/45">Preparation ID</dt><dd className="mt-0.5 break-all font-mono">{preflight.preparation.preparationId}</dd></div>
                 </dl>
               ) : null}
-              {preflight.status === 'APPROVAL_REQUIRED' ? <p className="mt-4 rounded-xl bg-amber-50 p-3 text-sm text-amber-900">This checkout will not request another token approval. The exact existing wNVDAx allowance must already be available.</p> : null}
+              {preflight.status === 'APPROVAL_REQUIRED' && preflight.preparation && !preparedValidationError ? (
+                <div className="mt-4 rounded-xl bg-amber-50 p-3 text-sm text-amber-950">
+                  <p>The buyer wallet will be asked to approve exactly {formatUnits(BigInt(preflight.preparation.amount), 18)} {selectedAsset.label} for this invoice. No unlimited allowance is requested.</p>
+                  <button type="button" className="portpay-button portpay-button--primary mt-3 rounded-lg bg-ink px-3.5 py-2.5 text-sm font-semibold text-white disabled:opacity-50" onClick={() => void approvePreparedMainnet()} disabled={isPaying || isWalletPromptOpen || isHandoffSignatureOpen || isPreparing}>
+                    {payStage === 'awaiting-approval' ? 'Confirm exact approval in wallet…' : payStage === 'confirming-approval' ? 'Confirming approval…' : `Approve ${formatUnits(BigInt(preflight.preparation.amount), 18)} ${selectedAsset.label}`}
+                  </button>
+                </div>
+              ) : null}
+              {approvalConfirmed ? <p className="mt-3 rounded-lg bg-emerald-50 px-3 py-2 text-sm text-emerald-800">Exact allowance confirmed. Pay is available only after the backend rechecks this same preparation.</p> : null}
+              {approvalTransactionHash ? <p className="mt-2 text-xs text-ink/60">Approval transaction: <a className="font-mono underline" href={`${mainnetNetworkConfig.explorerUrl}/tx/${approvalTransactionHash}`} target="_blank" rel="noreferrer">{approvalTransactionHash}</a></p> : null}
               {showPayButton && preflight.preparation ? (
                 <button type="button" className="portpay-button portpay-button--primary mt-4 rounded-xl bg-ink px-4 py-3 text-sm font-bold text-white disabled:cursor-wait disabled:opacity-50" onClick={() => void payPreparedMainnet()} disabled={isPaying || isWalletPromptOpen || isHandoffSignatureOpen}>
-                  {`Pay ${formatUnits(BigInt(preflight.preparation.amount), 18)} wNVDAx`}
+                  {`Pay ${formatUnits(BigInt(preflight.preparation.amount), 18)} ${selectedAsset.label}`}
                 </button>
               ) : null}
               {payStage === 'rechecking' ? <p className="payment-progress-note mt-3 text-sm text-ink/60">Rechecking invoice, buyer, chain, exact allowance, balances, Builder Code, expiry, and the same persisted calldata before opening the wallet.</p> : null}
@@ -1636,13 +1707,13 @@ function MainnetApprovalPanel({ invoice, onPaid }: { invoice: Invoice; onPaid: (
               ) : null}
             </div>
           ) : null}
-          {preflight?.status !== 'READY' && !preflight?.existingPayment && !transactionHash && payStage !== 'unresolved' ? <button type="button" className="mt-3 text-sm font-semibold text-ink/60 underline underline-offset-4 disabled:opacity-50" onClick={() => void refreshPreparation()} disabled={isPreparing || isPaying || isWalletPromptOpen}>
+          {(preflight?.status !== 'READY' || readyPreparationNeedsRefresh) && !preflight?.existingPayment && !transactionHash && payStage !== 'unresolved' ? <button type="button" className="mt-3 text-sm font-semibold text-ink/60 underline underline-offset-4 disabled:opacity-50" onClick={() => void refreshPreparation()} disabled={isPreparing || isPaying || isWalletPromptOpen}>
             {preflight ? 'Refresh mainnet preparation' : 'Retry mainnet preparation'}
           </button> : null}
         </div>
       )}
       {connectError ? <p className="mt-3 text-sm text-rose-700">{connectError.message}</p> : null}
-      <p className="mt-4 text-xs leading-5 text-ink/45">X Layer Mainnet · wNVDAx · chain 196. Pay uses the existing exact allowance and requires manual wallet confirmation; the invoice is paid only after canonical reconciliation.</p>
+      <p className="mt-4 text-xs leading-5 text-ink/45">X Layer Mainnet · wNVDAx / wAAPLx · chain 196. Approval, when needed, is exact and manual. Pay itself is approval-free and the invoice is paid only after canonical reconciliation.</p>
     </section>
   );
 }

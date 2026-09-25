@@ -128,7 +128,7 @@ class FakeOkxClient {
   approval = approvalData();
   swap = swapData();
 
-  async getQuote() { return this.quote; }
+  async getQuote(request: Parameters<OkxDexApiClient['getQuote']>[0]) { void request; return this.quote; }
   async getApprovalTransaction() { return this.approval; }
   async getSwapTransaction() { return this.swap; }
 }
@@ -155,6 +155,24 @@ async function createQuote(adapter: OKXDEXMainnetAdapter) {
 }
 
 describe('OKXDEXMainnetAdapter preparation boundary', () => {
+  it('sizes with a fresh validated exact-in quote for the requested token and amount', async () => {
+    const fake = new FakeOkxClient();
+    const requests: Array<{ amount: string; fromTokenAddress: string; toTokenAddress: string }> = [];
+    fake.getQuote = async (request: Parameters<OkxDexApiClient['getQuote']>[0]) => {
+      requests.push(request);
+      return quoteData();
+    };
+    const { adapter } = createAdapter(fake);
+    const sized = await adapter.getSizingQuote({
+      assetAmount: inputAmount, assetKey: 'wAapl', buyerAddress: buyer, invoice, slippagePercent: '1.5',
+    });
+    expect(requests).toHaveLength(1);
+    expect(requests[0]?.amount).toBe(inputAmount);
+    expect(requests[0]?.fromTokenAddress.toLowerCase()).toBe(mainnetAddressConfig.wAapl.toLowerCase());
+    expect(requests[0]?.toTokenAddress.toLowerCase()).toBe(mainnetAddressConfig.usdt0.toLowerCase());
+    expect(sized).toEqual({ expectedOutputAmount: '1001000', protectedOutputAmount: '985985' });
+  });
+
   it('targets a 120-second PortPay quote window but never outlives the OKX calldata deadline', async () => {
     const createdAt = Date.parse('2026-09-21T00:00:00.000Z');
     const nowSeconds = BigInt(Math.floor(createdAt / 1000));

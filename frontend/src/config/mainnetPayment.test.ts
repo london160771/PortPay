@@ -3,7 +3,8 @@ import { describe, expect, it, vi } from 'vitest';
 import type { Invoice, MainnetApprovalPreparation, MainnetApprovalPreparationResponse, MainnetReadinessRecheckResponse } from './api';
 import { toBuilderCodeDataSuffix } from './builderCodes';
 import { mainnetNetworkConfig } from './network';
-import { canOfferMainnetPay, clearMainnetSubmissionRecovery, mainnetPreparationNeedsRefresh, MAINNET_PRE_PROMPT_MIN_REMAINING_MS, MAINNET_TARGET_PREPARATION_WINDOW_MS, readMainnetSubmissionRecovery, saveMainnetSubmissionRecovery, validateMainnetPrePromptReadiness, validateReadyMainnetHandoff } from './mainnetPayment';
+import { hasExactMainnetAllowance, isSamePersistedMainnetPreparation } from './mainnetApproval';
+import { canOfferMainnetPay, clearMainnetSubmissionRecovery, mainnetPreparationNeedsRefresh, MAINNET_PRE_PROMPT_MIN_REMAINING_MS, readMainnetSubmissionRecovery, readyMainnetPreparationNeedsRefresh, saveMainnetSubmissionRecovery, validateMainnetPrePromptReadiness, validateReadyMainnetHandoff } from './mainnetPayment';
 
 const buyer = '0xbabdfef588cf57efcc7c8857960e3ccdd9167589' as Address;
 const merchant = '0x815c2fb8178f0bf80ada8c5b97ff44ece90e6e25' as Address;
@@ -48,10 +49,37 @@ function readiness(overrides: Partial<MainnetReadinessRecheckResponse> = {}): Ma
 }
 
 describe('buyer-signed Mainnet handoff guard', () => {
-  it('refreshes an expired or too-close preparation before requesting a wallet signature', () => {
+  it.each([
+    ['expired', preparation({ expiresAt: new Date(now - 1).toISOString() })],
+    ['less than 30 seconds remaining', preparation({ expiresAt: new Date(now + MAINNET_PRE_PROMPT_MIN_REMAINING_MS - 1).toISOString() })],
+  ])('routes an expired READY preparation to refresh before Pay eligibility (%s)', (_label, stalePreparation) => {
+    const response: MainnetApprovalPreparationResponse = {
+      status: 'READY', reason: 'Previously ready.', preparation: stalePreparation,
+    };
+
+    // App.tsx checks this recovery condition before chain/readiness calls or wallet prompts.
+    expect(readyMainnetPreparationNeedsRefresh(response, now)).toBe(true);
+    expect(canOfferMainnetPay(response, invoice, buyer, 196, now)).toBe(false);
+  });
+
+  it('allows the same READY preparation at the exact 30-second floor without refreshing it', () => {
+    const samePreparation = preparation({
+      expiresAt: new Date(now + MAINNET_PRE_PROMPT_MIN_REMAINING_MS).toISOString(),
+    });
+    const response: MainnetApprovalPreparationResponse = {
+      status: 'READY', reason: 'Previously ready.', preparation: samePreparation,
+    };
+
+    expect(readyMainnetPreparationNeedsRefresh(response, now)).toBe(false);
+    expect(canOfferMainnetPay(response, invoice, buyer, 196, now)).toBe(true);
+    expect(response.preparation).toBe(samePreparation);
+  });
+
+  it('keeps READY preparations with at least 30 seconds and returns shorter ones to preparation before wallet prompts', () => {
     expect(mainnetPreparationNeedsRefresh('2026-09-23T00:00:19.000Z', now)).toBe(true);
-    expect(mainnetPreparationNeedsRefresh(expiresAt, now)).toBe(true);
-    expect(mainnetPreparationNeedsRefresh(new Date(now + MAINNET_TARGET_PREPARATION_WINDOW_MS).toISOString(), now)).toBe(false);
+    expect(mainnetPreparationNeedsRefresh(new Date(now + MAINNET_PRE_PROMPT_MIN_REMAINING_MS - 1).toISOString(), now)).toBe(true);
+    expect(mainnetPreparationNeedsRefresh(new Date(now + MAINNET_PRE_PROMPT_MIN_REMAINING_MS).toISOString(), now)).toBe(false);
+    expect(mainnetPreparationNeedsRefresh(expiresAt, now)).toBe(false);
     expect(mainnetPreparationNeedsRefresh('not-a-date', now)).toBe(true);
     const fresh = preparation();
     expect(validateMainnetPrePromptReadiness({
@@ -62,19 +90,35 @@ describe('buyer-signed Mainnet handoff guard', () => {
       status: 'PREFLIGHT_PASSED', ready: false, reason: 'Read-only gates passed.', preparationId,
       preparationHash: fresh.preparationHash, expiresAt: '2026-09-23T00:00:30.000Z', checkedAt: new Date(now).toISOString(),
     }, fresh, invoice, buyer, 196, now)).not.toBeNull();
-    const shortUnderlyingWindow = preparation({ expiresAt: new Date(now + MAINNET_PRE_PROMPT_MIN_REMAINING_MS + 1).toISOString() });
-    expect(mainnetPreparationNeedsRefresh(shortUnderlyingWindow.expiresAt, now)).toBe(true);
+    const shortWindow = preparation({ expiresAt: new Date(now + MAINNET_PRE_PROMPT_MIN_REMAINING_MS - 1).toISOString() });
+    expect(mainnetPreparationNeedsRefresh(shortWindow.expiresAt, now)).toBe(true);
     expect(validateMainnetPrePromptReadiness({
       status: 'PREFLIGHT_PASSED', ready: false, reason: 'Read-only gates passed.', preparationId,
-      preparationHash: shortUnderlyingWindow.preparationHash, expiresAt: shortUnderlyingWindow.expiresAt,
+      preparationHash: shortWindow.preparationHash, expiresAt: shortWindow.expiresAt,
       checkedAt: new Date(now).toISOString(),
-    }, shortUnderlyingWindow, invoice, buyer, 196, now)).toBeNull();
+    }, shortWindow, invoice, buyer, 196, now)).not.toBeNull();
+  });
+
+  it('rechecks the same READY preparation and keeps its amount and immutable bindings when 30 seconds remain', () => {
+    const same = preparation({ expiresAt: new Date(now + MAINNET_PRE_PROMPT_MIN_REMAINING_MS).toISOString() });
+    const prePrompt: MainnetReadinessRecheckResponse = {
+      status: 'PREFLIGHT_PASSED', ready: false, reason: 'Same persisted preparation passed.', preparationId,
+      preparationHash: same.preparationHash, expiresAt: same.expiresAt, checkedAt: new Date(now).toISOString(),
+    };
+    const handoff = readiness({ expiresAt: same.expiresAt });
+    expect(mainnetPreparationNeedsRefresh(same.expiresAt, now)).toBe(false);
+    expect(validateMainnetPrePromptReadiness(prePrompt, same, invoice, buyer, 196, now)).toBeNull();
+    expect(validateReadyMainnetHandoff(handoff, same, invoice, buyer, 196, now)).toBeNull();
+    expect([same.preparationId, same.preparationHash, same.amount, same.minimumReceive, same.spender, same.attributedApprovalCalldata])
+      .toEqual([preparationId, `0x${'a'.repeat(64)}`, amount, '1000000', spender, preparation().attributedApprovalCalldata]);
   });
 
   it('makes Pay available for a READY response containing the validated existing preparation', () => {
     const persistedPreparation = preparation();
     const response: MainnetApprovalPreparationResponse = { status: 'READY', reason: 'Full preflight passed.', preparation: persistedPreparation };
     expect(canOfferMainnetPay(response, invoice, buyer, 196, now)).toBe(true);
+    expect(canOfferMainnetPay({ ...response, preparation: preparation({ snapshotAllowance: '0' }) }, invoice, buyer, 196, now)).toBe(false);
+    expect(canOfferMainnetPay({ ...response, preparation: preparation({ snapshotAllowance: (BigInt(amount) + 1n).toString() }) }, invoice, buyer, 196, now)).toBe(false);
     expect(canOfferMainnetPay({ status: 'READY' }, invoice, buyer, 196, now)).toBe(false);
     expect(canOfferMainnetPay({ ...response, status: 'APPROVAL_REQUIRED' }, invoice, buyer, 196, now)).toBe(false);
     const retry = {
@@ -85,6 +129,18 @@ describe('buyer-signed Mainnet handoff guard', () => {
     expect(canOfferMainnetPay({ ...retry, status: 'READY' }, invoice, buyer, 196, now)).toBe(false);
     expect(canOfferMainnetPay({ ...retry, existingPayment: { ...retry.existingPayment, transactionHash: `0x${'c'.repeat(64)}` as Hex } }, invoice, buyer, 196, now)).toBe(false);
     expect(canOfferMainnetPay({ ...retry, existingPayment: { ...retry.existingPayment, preparationId: 'different' } }, invoice, buyer, 196, now)).toBe(false);
+  });
+
+  it('transitions from approval-required to Pay only after exact allowance reread and same-preparation READY', () => {
+    const persisted = preparation();
+    const approvalRequired: MainnetApprovalPreparationResponse = { status: 'APPROVAL_REQUIRED', reason: 'Exact approval required.', preparation: persisted };
+    expect(canOfferMainnetPay(approvalRequired, invoice, buyer, 196, now)).toBe(false);
+    expect(hasExactMainnetAllowance(BigInt(amount), persisted.amount)).toBe(true);
+    expect(hasExactMainnetAllowance(BigInt(amount) - 1n, persisted.amount)).toBe(false);
+    const afterApproval: MainnetApprovalPreparationResponse = { status: 'READY', reason: 'Persisted readiness passed.', preparation: preparation() };
+    expect(isSamePersistedMainnetPreparation(persisted, afterApproval.preparation!)).toBe(true);
+    expect(canOfferMainnetPay(afterApproval, invoice, buyer, 196, now)).toBe(true);
+    expect(canOfferMainnetPay({ ...afterApproval, preparation: preparation({ amount: '4800000000000001' }) }, invoice, buyer, 196, now)).toBe(false);
   });
 
   it('accepts only the READY server response bound to the same fresh preparation and buyer', () => {
