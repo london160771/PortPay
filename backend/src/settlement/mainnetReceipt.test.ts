@@ -11,6 +11,8 @@ import { verifyMainnetReceipt, type MainnetReceiptClient, type MainnetReceiptLog
 const buyer = '0xbabdfef588cf57efcc7c8857960e3ccdd9167589' as Address;
 const merchant = '0x815c2fb8178f0bf80ada8c5b97ff44ece90e6e25' as Address;
 const router = '0x7c5bee2a8091c3ef39072f64f18fac913060aeaf' as Address;
+const routeAdapter = '0xcc96b656b6dff0b5318d53271b82b7e7183b95d2' as Address;
+const routePool = '0x2a2b11730c2b6d99a58034a869dd810d7300a7b2' as Address;
 const spender = '0x8b773d83bc66be128c60e07e17c8901f7a64f000' as Address;
 const txHash = `0x${'a'.repeat(64)}` as Hex;
 const blockHash = `0x${'b'.repeat(64)}` as Hex;
@@ -38,13 +40,13 @@ function quoteData(): OkxQuoteData {
 function approval(): OkxApprovalData {
   return { data: encodeFunctionData({ abi: approveAbi, functionName: 'approve', args: [spender, BigInt(inputAmount)] }), dexContractAddress: spender, gasLimit: '70000', gasPrice: '27000001' };
 }
-function swap(): OkxSwapData {
-  const data = encodeFunctionData({ abi: swapAbi, functionName: 'dagSwapTo', args: [1n, merchant, { fromToken: BigInt(asset), toToken: stablecoin, fromTokenAmount: BigInt(inputAmount), minReturnAmount: 1_000_000n, deadLine: 1_790_000_000n }, [{ mixAdapters: [merchant], assetTo: [stablecoin], rawData: [1n], extraData: ['0x'], fromToken: BigInt(asset) }]] });
+function swap(inputAdapter: Address = merchant): OkxSwapData {
+  const data = encodeFunctionData({ abi: swapAbi, functionName: 'dagSwapTo', args: [1n, merchant, { fromToken: BigInt(asset), toToken: stablecoin, fromTokenAmount: BigInt(inputAmount), minReturnAmount: 1_000_000n, deadLine: 1_790_000_000n }, [{ mixAdapters: [inputAdapter], assetTo: [inputAdapter], rawData: [1n], extraData: ['0x'], fromToken: BigInt(asset) }]] });
   return { routerResult: quoteData(), tx: { data, from: buyer, gas: '338400', gasPrice: '27000001', minReceiveAmount: '1000000', slippagePercent: '0.5', to: router, value: '0' } };
 }
-class FakeApi { async getQuote() { return quoteData(); } async getApprovalTransaction() { return approval(); } async getSwapTransaction() { return swap(); } }
-async function prepared() {
-  const adapter = new OKXDEXMainnetAdapter({ apiClient: new FakeApi() as unknown as OkxDexApiClient, builderCode, now: () => new Date('2026-09-21T00:00:00.000Z') });
+class FakeApi { constructor(private readonly inputAdapter: Address = merchant) {} async getQuote() { return quoteData(); } async getApprovalTransaction() { return approval(); } async getSwapTransaction() { return swap(this.inputAdapter); } }
+async function prepared(inputAdapter: Address = merchant) {
+  const adapter = new OKXDEXMainnetAdapter({ apiClient: new FakeApi(inputAdapter) as unknown as OkxDexApiClient, builderCode, now: () => new Date('2026-09-21T00:00:00.000Z') });
   const quote = await adapter.getQuote({ assetAmount: inputAmount, assetKey: 'wAapl', buyerAddress: buyer, invoice });
   return { quote, approval: await adapter.prepareApprovalTransaction(quote), swap: await adapter.prepareSwapTransaction(quote) };
 }
@@ -80,8 +82,8 @@ function receiptClient(logs: readonly MainnetReceiptLog[], options: ClientOption
   };
 }
 let expectedSwapInput: Hex = '0x';
-async function fixture(options: { recordSubmission?: boolean; submittedAt?: string } = {}) {
-  const setup = await prepared();
+async function fixture(options: { recordSubmission?: boolean; submittedAt?: string; inputAdapter?: Address } = {}) {
+  const setup = await prepared(options.inputAdapter);
   expectedSwapInput = setup.swap.attributedData!;
   let repositoryTime = new Date('2026-09-21T00:00:10.000Z');
   const repository = new InMemoryMainnetReconciliationRepository(() => repositoryTime);
@@ -160,6 +162,26 @@ describe('mainnet receipt/reconciliation verification', () => {
     expect(result.spentAmount).toBe(netDebit.toString());
     expect(result.balanceEvidence.buyerInputDelta).toBe(netDebit.toString());
     expect(result.stablecoinReceived).toBe('1000000');
+  });
+
+  it('accepts buyer input sent to the exact first-hop adapter encoded in persisted OKX calldata only', async () => {
+    const value = await fixture({ inputAdapter: routeAdapter });
+    const routeLogs = [
+      transferLog(asset, buyer, routeAdapter, BigInt(inputAmount)),
+      transferLog(asset, routeAdapter, routePool, BigInt(inputAmount)),
+      transferLog(stablecoin, router, merchant, 1_000_000n),
+    ];
+    const result = await verifyMainnetReceipt({ ...value.common, publicClient: receiptClient(routeLogs) });
+    expect(result.status).toBe('paid');
+    expect(result.spentAmount).toBe(inputAmount);
+    expect(result.stablecoinReceived).toBe('1000000');
+
+    const unexplainedRouteLogs = [
+      transferLog(asset, buyer, routePool, BigInt(inputAmount)),
+      transferLog(stablecoin, router, merchant, 1_000_000n),
+    ];
+    await expect(verifyMainnetReceipt({ ...value.common, publicClient: receiptClient(unexplainedRouteLogs) }))
+      .rejects.toMatchObject({ code: 'INVALID_INPUT_AMOUNT' });
   });
 
   it('rejects unexplained refunds and still enforces the merchant invoice floor', async () => {

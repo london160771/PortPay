@@ -1,5 +1,5 @@
 import { Attribution } from 'ox/erc8021';
-import { decodeEventLog, decodeFunctionData, getAddress, isAddress, keccak256, parseUnits, type Address, type Hex } from 'viem';
+import { decodeEventLog, decodeFunctionData, getAddress, isAddress, keccak256, parseAbi, parseUnits, type Address, type Hex } from 'viem';
 import type { Invoice } from '../invoices/types.js';
 import { mainnetAddressConfig, VERIFIED_MAINNET_BUILDER_CODE_REGISTRY_ADDRESS, VERIFIED_MAINNET_USDT0_ADDRESS, VERIFIED_TESTNET_BUILDER_CODE } from '../config/xlayerMainnet.js';
 import { verifyMainnetBuilderCode, type MainnetBuilderCodeCheck } from './mainnetBuilderCodes.js';
@@ -19,6 +19,11 @@ const approvalAbi = [{
   type: 'function', name: 'approve', stateMutability: 'nonpayable',
   inputs: [{ name: 'spender', type: 'address' }, { name: 'amount', type: 'uint256' }], outputs: [{ name: '', type: 'bool' }],
 }] as const;
+const mainnetSwapAbi = parseAbi([
+  'function dagSwapTo(uint256 orderId, address receiver, (uint256 fromToken, address toToken, uint256 fromTokenAmount, uint256 minReturnAmount, uint256 deadLine) baseRequest, (address[] mixAdapters, address[] assetTo, uint256[] rawData, bytes[] extraData, uint256 fromToken)[] paths) payable returns (uint256)',
+  'function uniswapV3SwapToWithBaseRequest(uint256 orderId, address receiver, (uint256 fromToken, address toToken, uint256 fromTokenAmount, uint256 minReturnAmount, uint256 deadLine) baseRequest, uint256[] pools) payable returns (uint256)',
+  'function unxswapToWithBaseRequest(uint256 orderId, address receiver, (uint256 fromToken, address toToken, uint256 fromTokenAmount, uint256 minReturnAmount, uint256 deadLine) baseRequest, bytes32[] pools) payable returns (uint256)',
+]);
 const DEFAULT_MAINNET_CONFIRMATION_DEPTH = 2;
 
 export type MainnetReceiptLog = { address: Address; data: Hex; topics: readonly Hex[] };
@@ -70,6 +75,30 @@ function exactUint(value: unknown, label: string): bigint {
 function positiveStoredInteger(value: string, label: string): bigint {
   if (!/^[1-9][0-9]*$/.test(value)) return fail('INVALID_PREPARATION', `${label} must be an exact positive base-unit integer.`);
   return BigInt(value);
+}
+function packedTokenAddress(value: bigint): Address {
+  return getAddress(`0x${(value & ((1n << 160n) - 1n)).toString(16).padStart(40, '0')}`);
+}
+function permittedBuyerInputRecipients(evidence: MainnetPreparationEvidence, asset: Address, router: Address): Set<string> {
+  const recipients = new Set([router.toLowerCase()]);
+  let decoded: ReturnType<typeof decodeFunctionData<typeof mainnetSwapAbi>>;
+  try {
+    decoded = decodeFunctionData({ abi: mainnetSwapAbi, data: evidence.swap.data });
+  } catch {
+    return fail('INVALID_PREPARATION', 'Persisted swap calldata cannot be decoded to identify its input route.');
+  }
+  if (decoded.functionName !== 'dagSwapTo') return recipients;
+
+  const baseRequest = decoded.args[2];
+  const firstPath = decoded.args[3][0];
+  if (!firstPath || !sameAddress(packedTokenAddress(baseRequest.fromToken), asset)
+    || !sameAddress(packedTokenAddress(firstPath.fromToken), asset)
+    || firstPath.mixAdapters.length !== 1 || firstPath.assetTo.length !== 1
+    || !sameAddress(firstPath.mixAdapters[0], firstPath.assetTo[0])) {
+    return fail('INVALID_PREPARATION', 'The first input route recipient is ambiguous or does not match the prepared input token.');
+  }
+  recipients.add(normalizeAddress(firstPath.assetTo[0], 'Prepared first-hop adapter').toLowerCase());
+  return recipients;
 }
 function transferFromLog(log: MainnetReceiptLog, token: Address): { from: Address; to: Address; value: bigint } | undefined {
   if (!sameAddress(log.address, token)) return undefined;
@@ -223,9 +252,10 @@ export async function verifyMainnetReceipt(options: MainnetReceiptVerifierOption
   const stablecoinTransfers = rereadReceipt.logs.map((log) => transferFromLog(log, stablecoin)).filter((value): value is NonNullable<typeof value> => Boolean(value));
   const buyerOutflows = assetTransfers.filter((transfer) => sameAddress(transfer.from, buyer));
   const buyerRefunds = assetTransfers.filter((transfer) => sameAddress(transfer.to, buyer));
-  if (buyerOutflows.some((transfer) => !sameAddress(transfer.to, router))
+  const allowedInputRecipients = permittedBuyerInputRecipients(evidence, asset, router);
+  if (buyerOutflows.some((transfer) => !allowedInputRecipients.has(transfer.to.toLowerCase()))
     || buyerRefunds.some((transfer) => !sameAddress(transfer.from, router))) {
-    fail('INVALID_INPUT_AMOUNT', 'Input-token movements include an unexplained or non-router transfer to/from the buyer.');
+    fail('INVALID_INPUT_AMOUNT', 'Input-token movements include an unexplained route recipient or non-router transfer to/from the buyer.');
   }
   const grossBuyerOutflow = buyerOutflows.reduce((sum, transfer) => sum + transfer.value, 0n);
   const routerRefund = buyerRefunds.reduce((sum, transfer) => sum + transfer.value, 0n);
