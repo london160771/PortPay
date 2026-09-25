@@ -120,7 +120,7 @@ function TokenBalanceCard({ asset, account, canRead }: TokenBalanceCardProps) {
   }
 
   return (
-    <article className="portpay-appear rounded-2xl border border-ink/10 bg-paper p-4 text-ink shadow-panel transition hover:-translate-y-0.5 hover:shadow-soft">
+    <article className="wallet-balance-card portpay-appear rounded-2xl border border-ink/10 bg-paper p-4 text-ink shadow-panel transition hover:-translate-y-0.5 hover:shadow-soft">
       <div className="flex items-start justify-between gap-4">
         <div>
           <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-ink/45">Wallet balance</p>
@@ -146,14 +146,14 @@ function WalletPanel() {
   const canReadBalances = networkState === 'ready' && Boolean(address);
 
   return (
-    <section className="portpay-appear relative overflow-hidden rounded-[1.75rem] border border-white/10 bg-ink p-5 text-white shadow-soft sm:p-6">
+    <section className="wallet-panel portpay-appear relative overflow-hidden rounded-[1.75rem] border border-ink/10 bg-paper p-5 text-ink shadow-panel sm:p-6">
       <div className="portpay-grid pointer-events-none absolute inset-0 opacity-30" />
       <div className="relative">
       <div className="flex flex-col gap-5 sm:flex-row sm:items-start sm:justify-between">
         <div>
-          <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-mint/75">Merchant wallet</p>
+          <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-emerald-700">Merchant wallet</p>
           <h2 className="mt-2 text-2xl font-semibold tracking-tight">Ready to collect</h2>
-          <p className="mt-2 max-w-xl text-sm leading-6 text-white/60">
+          <p className="mt-2 max-w-xl text-sm leading-6 text-ink/60">
             Connect OKX Wallet to create invoices and payment links for X Layer Mainnet.
           </p>
         </div>
@@ -163,7 +163,7 @@ function WalletPanel() {
               ? 'bg-mint text-ink'
               : networkState === 'wrong-network'
                 ? 'bg-amber-300 text-amber-950'
-                : 'bg-white/10 text-white/70'
+                : 'bg-cloud text-ink/60'
           }`}
         >
           {networkState === 'ready'
@@ -178,40 +178,40 @@ function WalletPanel() {
         <div className="mt-7">
           <button
             type="button"
-            className="rounded-xl bg-mint px-5 py-3 text-sm font-bold text-ink transition hover:bg-white disabled:cursor-wait disabled:opacity-60"
+            className="portpay-button portpay-button--primary rounded-xl bg-mint px-5 py-3 text-sm font-bold text-ink transition hover:bg-white disabled:cursor-wait disabled:opacity-60"
             onClick={() => connect({ connector: okxWalletConnector })}
             disabled={isConnecting}
           >
             {isConnecting ? 'Opening OKX Wallet…' : 'Connect OKX Wallet'}
           </button>
-          <p className="mt-3 text-xs text-white/45">OKX Wallet must be installed and unlocked in this browser.</p>
-          {connectError ? <p className="mt-3 text-sm text-rose-200">{connectError.message}</p> : null}
-        </div>
+          <p className="mt-3 text-xs text-ink/50">OKX Wallet must be installed and unlocked in this browser.</p>
+          {connectError ? <p className="mt-3 text-sm text-rose-700">{connectError.message}</p> : null}
+      </div>
       ) : networkState === 'wrong-network' ? (
-        <div className="mt-7 rounded-2xl border border-amber-200/20 bg-amber-200/10 p-4">
-          <p className="text-sm font-semibold text-amber-100">Switch to X Layer Mainnet to create invoices.</p>
-          <p className="mt-1 text-xs text-amber-100/70">
+        <div className="mt-7 rounded-xl border border-amber-200 bg-amber-50 p-4">
+          <p className="text-sm font-semibold text-amber-950">Switch to X Layer Mainnet to create invoices.</p>
+          <p className="mt-1 text-xs text-amber-900/75">
             This wallet is connected on chain {chainId ?? 'unknown'}; PortPay merchant actions require chain 196.
           </p>
           <button
             type="button"
-            className="mt-4 rounded-xl bg-amber-200 px-4 py-2.5 text-sm font-bold text-amber-950 transition hover:bg-white disabled:cursor-wait disabled:opacity-60"
+            className="portpay-button portpay-button--network mt-4 rounded-xl bg-amber-200 px-4 py-2.5 text-sm font-bold text-amber-950 transition hover:bg-white disabled:cursor-wait disabled:opacity-60"
             onClick={() => switchChain({ chainId: xLayerMainnet.id })}
             disabled={isSwitching}
           >
             {isSwitching ? 'Switching network…' : 'Switch to X Layer Mainnet'}
           </button>
-          {switchError ? <p className="mt-3 text-sm text-rose-200">{switchError.message}</p> : null}
+          {switchError ? <p className="mt-3 text-sm text-rose-700">{switchError.message}</p> : null}
         </div>
       ) : (
         <div className="mt-7 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
           <div>
-            <p className="text-sm font-semibold text-mint">Wallet connected to X Layer Mainnet</p>
-            <p className="mt-1 font-mono text-sm text-white/60">{shortenAddress(address!)}</p>
+          <p className="text-sm font-semibold text-emerald-700">Wallet connected to X Layer Mainnet</p>
+            <p className="mt-1 font-mono text-sm text-ink/60">{shortenAddress(address!)}</p>
           </div>
           <button
             type="button"
-            className="rounded-xl border border-white/20 px-4 py-2.5 text-sm font-semibold text-white/80 transition hover:border-white/50 hover:text-white"
+            className="rounded-xl border border-ink/15 px-4 py-2.5 text-sm font-semibold text-ink/65 transition hover:border-ink/30 hover:text-ink"
             onClick={() => disconnect()}
           >
             Disconnect
@@ -219,7 +219,7 @@ function WalletPanel() {
         </div>
       )}
 
-      <div className="mt-7 grid gap-3 border-t border-white/10 pt-5 text-xs text-white/45 sm:grid-cols-2">
+      <div className="mt-7 grid gap-3 border-t border-ink/10 pt-5 text-xs text-ink/50 sm:grid-cols-2">
         <span>Network: {xLayerMainnet.name}</span>
         <span>Chain ID: {mainnetNetworkConfig.chainId}</span>
         <span>Gas: {xLayerMainnet.nativeCurrency.symbol}</span>
@@ -253,7 +253,7 @@ function CopyButton({ value }: { value: string }) {
     <button
       type="button"
       aria-label="Copy payment link"
-      className="rounded-xl bg-ink px-4 py-2.5 text-sm font-semibold text-white transition hover:-translate-y-0.5 hover:bg-ink/80"
+      className="portpay-button copy-link-button rounded-xl bg-ink px-4 py-2.5 text-sm font-semibold text-white transition hover:-translate-y-0.5 hover:bg-ink/80"
       onClick={copyValue}
     >
       {copied ? 'Copied' : 'Copy link'}
@@ -297,7 +297,7 @@ function InvoiceForm({
   }
 
   return (
-    <section id="create-invoice" className="portpay-appear rounded-3xl border border-ink/10 bg-paper p-6 shadow-panel sm:p-7">
+    <section id="create-invoice" className="merchant-form-card portpay-appear rounded-3xl border border-ink/10 bg-paper p-6 shadow-panel sm:p-7">
       <div>
         <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-ink/45">Step 1 · Create</p>
         <h2 className="mt-2 text-2xl font-semibold tracking-tight">Create a payment request</h2>
@@ -310,7 +310,7 @@ function InvoiceForm({
         <label className="block">
           <span className="text-sm font-semibold">Product or service name</span>
           <input
-            className="mt-2 w-full rounded-xl border border-ink/15 bg-cloud px-4 py-3 text-sm outline-none transition focus:border-electric/70 focus:bg-white"
+            className="portpay-input mt-2 w-full rounded-xl border border-ink/15 bg-cloud px-4 py-3 text-sm outline-none transition focus:border-electric/70 focus:bg-white"
             value={title}
             onChange={(event) => setTitle(event.target.value)}
             placeholder="Harbor design consultation"
@@ -321,9 +321,9 @@ function InvoiceForm({
 
         <label className="block">
           <span className="text-sm font-semibold">Amount due in USD₮0</span>
-            <div className="mt-2 flex items-center rounded-xl border border-ink/15 bg-cloud focus-within:border-electric/70 focus-within:bg-white">
+            <div className="portpay-input-group mt-2 flex items-center rounded-xl border border-ink/15 bg-cloud focus-within:border-electric/70 focus-within:bg-white">
             <input
-              className="min-w-0 flex-1 bg-transparent px-4 py-3 text-sm outline-none"
+              className="portpay-input min-w-0 flex-1 bg-transparent px-4 py-3 text-sm outline-none"
               value={amountUsdt0}
               onChange={(event) => setAmountUsdt0(event.target.value)}
               placeholder="20.00"
@@ -339,7 +339,7 @@ function InvoiceForm({
 
         <button
           type="submit"
-          className="w-full rounded-xl bg-ink px-5 py-3.5 text-sm font-bold text-white shadow-sm transition hover:-translate-y-0.5 hover:bg-ink/85 hover:shadow-panel disabled:cursor-not-allowed disabled:opacity-40"
+          className="portpay-button portpay-button--primary w-full rounded-xl bg-ink px-5 py-3.5 text-sm font-bold text-white shadow-sm transition hover:-translate-y-0.5 hover:bg-ink/85 hover:shadow-panel disabled:cursor-not-allowed disabled:opacity-40"
           disabled={!canCreate || isSubmitting}
         >
           {isSubmitting ? 'Saving invoice…' : 'Create invoice and payment link'}
@@ -356,7 +356,7 @@ function InvoiceStatusPill({ status, label }: { status: Invoice['status']; label
   return (
     <span
       aria-label={`Invoice status: ${label ?? invoiceStatusLabel(status)}`}
-      className={`rounded-full px-3 py-1 text-xs font-bold ${
+      className={`invoice-status-pill rounded-full px-3 py-1 text-xs font-bold ${
         status === 'paid' ? 'bg-mint text-ink' : 'bg-amber-100 text-amber-900'
       }`}
     >
@@ -410,7 +410,7 @@ function PaymentHistoryPanel({
   }, [address, canRead, view]);
 
   return (
-    <section id="history" className="portpay-appear rounded-2xl border border-ink/10 bg-paper p-5 shadow-panel sm:p-6">
+    <section id="history" className="payment-history-panel portpay-appear rounded-2xl border border-ink/10 bg-paper p-5 shadow-panel sm:p-6">
       <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
         <div>
           <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-ink/45">Step 3 · History</p>
@@ -446,7 +446,7 @@ function PaymentHistoryPanel({
             const explorerUrl = getExplorerTransactionUrl(payment.paymentTxHash, paymentNetwork);
             const evidenceComplete = hasVerifiedPaymentEvidence(payment);
             return (
-              <article key={payment.id} className="group rounded-2xl border border-ink/10 bg-cloud/60 p-4 transition hover:border-ink/20 hover:bg-white sm:p-5">
+              <article key={payment.id} className="payment-history-row group rounded-2xl border border-ink/10 bg-cloud/60 p-4 transition hover:border-ink/20 hover:bg-white sm:p-5">
                 <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                   <button type="button" className="text-left" onClick={() => onOpenInvoice(payment.id)}>
                     <p className="font-semibold group-hover:underline group-hover:underline-offset-4">{payment.title}</p>
@@ -507,30 +507,30 @@ function DemoJourney() {
   ];
 
   return (
-    <aside id="two-tab-demo" className="portpay-appear rounded-[1.75rem] border border-white/10 bg-ink p-5 text-white shadow-soft sm:p-6">
+    <aside id="two-tab-demo" className="demo-journey-card portpay-appear rounded-[1.75rem] border border-ink/10 bg-paper p-5 text-ink shadow-panel sm:p-6">
       <div className="flex items-center justify-between gap-4">
         <div>
-          <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-mint/75">Merchant + buyer flow</p>
+          <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-emerald-700">Merchant + buyer flow</p>
           <h2 className="mt-2 text-xl font-semibold tracking-tight">One invoice link. A clear payment path.</h2>
         </div>
-        <span className="grid h-10 w-10 place-items-center rounded-2xl bg-mint text-lg font-bold text-ink">↗</span>
+        <span className="demo-journey-icon grid h-9 w-9 place-items-center rounded-xl bg-mint text-base font-semibold text-ink">↗</span>
       </div>
-      <div className="mt-7 space-y-5">
+      <div className="demo-journey-steps mt-7 space-y-5">
         {steps.map((step, index) => (
           <div key={step.number} className="flex gap-4">
             <div className="flex flex-col items-center">
-              <span className="grid h-8 w-8 shrink-0 place-items-center rounded-full bg-white/10 font-mono text-[10px] font-bold text-mint">{step.number}</span>
-              {index < steps.length - 1 ? <span className="mt-2 h-full w-px bg-white/10" /> : null}
+              <span className="demo-journey-step-number grid h-7 w-7 shrink-0 place-items-center rounded-full bg-cloud font-mono text-[10px] font-semibold text-ink/65">{step.number}</span>
+              {index < steps.length - 1 ? <span className="mt-2 h-full w-px bg-ink/10" /> : null}
             </div>
             <div className={index < steps.length - 1 ? 'pb-1' : ''}>
-              <p className="font-semibold">{step.title}</p>
-              <p className="mt-1 text-sm leading-6 text-white/55">{step.detail}</p>
+              <p className="demo-journey-step-title font-semibold">{step.title}</p>
+              <p className="demo-journey-step-detail mt-1 text-sm leading-6 text-ink/55">{step.detail}</p>
             </div>
           </div>
         ))}
       </div>
-      <div className="mt-7 rounded-2xl border border-mint/20 bg-mint/10 p-4 text-xs leading-5 text-white/65">
-        <span className="font-semibold text-mint">Mainnet Pay.</span> Buyer-signed payment is implemented and requires explicit OKX Wallet confirmation. The backend never signs or broadcasts; paid status follows canonical verification. Real use remains subject to final review and authorization.
+      <div className="demo-journey-note mt-6 rounded-xl border border-emerald-900/10 bg-emerald-50 p-3 text-xs leading-5 text-ink/65">
+        <span className="font-semibold text-emerald-800">Mainnet Pay.</span> Buyer-signed payment is implemented and requires explicit OKX Wallet confirmation. The backend never signs or broadcasts; paid status follows canonical verification. Real use remains subject to final review and authorization.
       </div>
     </aside>
   );
@@ -583,14 +583,14 @@ function MerchantDashboard({ onOpenMerchantInvoice }: { onOpenMerchantInvoice: (
 
   return (
     <>
-      <section className="relative grid gap-8 overflow-hidden py-8 sm:py-10 lg:grid-cols-[1.1fr_0.9fr] lg:items-end lg:py-12">
+      <section className="merchant-hero relative grid gap-8 overflow-hidden py-8 sm:py-10 lg:grid-cols-[1.1fr_0.9fr] lg:items-end lg:py-12">
         <div className="portpay-grid pointer-events-none absolute inset-x-0 top-0 h-full opacity-50" />
         <div className="relative">
           <div className="mb-6 inline-flex items-center gap-2 rounded-full border border-ink/10 bg-white/75 px-3 py-1.5 text-[11px] font-bold uppercase tracking-[0.16em] text-ink/60 shadow-sm">
             <span className="h-2 w-2 rounded-full bg-emerald-600" />
             Merchant workspace · X Layer Mainnet
           </div>
-          <h1 className="max-w-3xl text-4xl font-semibold leading-[1] tracking-[-0.055em] sm:text-6xl">
+          <h1 className="merchant-hero__title max-w-3xl text-4xl font-semibold leading-[1] tracking-[-0.055em] sm:text-6xl">
             Spend portfolios.<br /><span className="text-ink/45">Receive stablecoins.</span>
           </h1>
           <p className="mt-5 max-w-2xl text-base leading-7 text-ink/65">
@@ -610,18 +610,18 @@ function MerchantDashboard({ onOpenMerchantInvoice }: { onOpenMerchantInvoice: (
 
       <WalletPanel />
 
-      <section className="grid gap-4 py-6 sm:grid-cols-3">
-        <div className="portpay-appear rounded-3xl border border-ink/10 bg-paper p-5 shadow-panel">
+      <section className="merchant-metrics grid gap-4 py-6 sm:grid-cols-3">
+        <div className="merchant-metric portpay-appear rounded-3xl border border-ink/10 bg-paper p-5 shadow-panel">
           <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-ink/45">All invoices</p>
           <p className="mt-3 text-4xl font-semibold tracking-tight">{invoices.length}</p>
           <p className="mt-2 text-sm text-ink/55">Stored for this merchant wallet.</p>
         </div>
-        <div className="portpay-appear rounded-3xl border border-ink/10 bg-paper p-5 shadow-panel">
+        <div className="merchant-metric portpay-appear rounded-3xl border border-ink/10 bg-paper p-5 shadow-panel">
           <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-ink/45">Awaiting payment</p>
           <p className="mt-3 text-4xl font-semibold tracking-tight">{pendingCount}</p>
           <p className="mt-2 text-sm text-ink/55">Open requests waiting for a buyer.</p>
         </div>
-        <div className="portpay-appear rounded-3xl border border-ink/10 bg-ink p-5 text-white shadow-panel">
+        <div className="merchant-metric merchant-metric--paid portpay-appear rounded-3xl border border-ink/10 bg-ink p-5 text-white shadow-panel">
           <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-mint/70">Payment received</p>
           <p className="mt-3 text-4xl font-semibold tracking-tight">{paidCount}</p>
           <p className="mt-2 text-sm text-white/55">Confirmed from settlement evidence.</p>
@@ -631,7 +631,7 @@ function MerchantDashboard({ onOpenMerchantInvoice }: { onOpenMerchantInvoice: (
       <section className="grid gap-5 pb-6 lg:grid-cols-[0.9fr_1.1fr]">
         <InvoiceForm merchantAddress={address} canCreate={canCreate} onCreated={handleCreated} />
 
-        <section className="portpay-appear rounded-3xl border border-ink/10 bg-paper p-6 shadow-panel sm:p-7">
+        <section className="merchant-invoice-list portpay-appear rounded-3xl border border-ink/10 bg-paper p-6 shadow-panel sm:p-7">
           <div className="flex items-start justify-between gap-4">
             <div>
               <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-ink/45">Step 2 · Monitor</p>
@@ -641,7 +641,7 @@ function MerchantDashboard({ onOpenMerchantInvoice }: { onOpenMerchantInvoice: (
           </div>
 
           {createdInvoice ? (
-              <div className="mt-6 rounded-2xl border border-emerald-200 bg-emerald-50 p-4 shadow-sm">
+              <div className="payment-link-ready mt-6 rounded-2xl border border-emerald-200 bg-emerald-50 p-4 shadow-sm">
               <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-emerald-800">Payment link ready</p>
               <p className="mt-2 font-semibold text-emerald-950">{createdInvoice.title}</p>
               <div className="mt-3 flex flex-col gap-3 sm:flex-row sm:items-center">
@@ -676,16 +676,16 @@ function MerchantDashboard({ onOpenMerchantInvoice }: { onOpenMerchantInvoice: (
                 <button
                   key={invoice.id}
                   type="button"
-                  className="flex w-full items-center justify-between gap-4 py-4 text-left transition hover:bg-cloud/60"
+                  className="merchant-invoice-row flex w-full items-center justify-between gap-4 py-4 text-left transition hover:bg-cloud/60"
                   onClick={() => onOpenMerchantInvoice(invoice.id)}
                 >
-                  <span className="min-w-0">
-                    <span className="block truncate font-semibold">{invoice.title}</span>
-                    <span className="mt-1 block text-xs text-ink/45">
+                  <span className="merchant-invoice-row__main min-w-0">
+                    <span className="merchant-invoice-row__title block truncate font-semibold">{invoice.title}</span>
+                    <span className="merchant-invoice-row__meta mt-1 block text-xs text-ink/45">
                       {new Date(invoice.createdAt).toLocaleString()} · {shortenAddress(invoice.merchantAddress)}
                     </span>
                   </span>
-                  <span className="flex shrink-0 flex-col items-end gap-2">
+                  <span className="merchant-invoice-row__amount flex shrink-0 flex-col items-end gap-2">
                     <span className="font-semibold">{invoice.amountUsdt0} USD₮0</span>
                     <InvoiceStatusPill status={invoice.status} />
                   </span>
@@ -1578,17 +1578,17 @@ function MainnetApprovalPanel({ invoice, onPaid }: { invoice: Invoice; onPaid: (
     && !transactionHash && payStage === 'idle';
 
   return (
-    <section className="mt-5 rounded-2xl border border-ink/10 bg-cloud p-5">
+    <section className="mainnet-payment-panel mt-5 rounded-2xl border border-ink/10 bg-cloud p-5">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-amber-800">Mainnet payment · manual wallet confirmation</p>
           <p className="mt-1 text-sm leading-6 text-ink/65">PortPay rechecks the existing persisted transaction immediately before Pay. No additional approval or automatic send is used.</p>
         </div>
-        <span className="rounded-full bg-amber-100 px-3 py-1.5 text-[10px] font-bold uppercase tracking-[0.12em] text-amber-950">X Layer · 196</span>
+        <span className="payment-network-pill rounded-full bg-amber-100 px-3 py-1.5 text-[10px] font-bold uppercase tracking-[0.12em] text-amber-950">X Layer · 196</span>
       </div>
 
       {!isConnected ? (
-        <button type="button" className="mt-5 rounded-xl bg-ink px-4 py-3 text-sm font-bold text-white disabled:opacity-50" onClick={() => connect({ connector: okxWalletConnector })} disabled={isConnecting}>
+        <button type="button" className="portpay-button portpay-button--primary mt-5 rounded-xl bg-ink px-4 py-3 text-sm font-bold text-white disabled:opacity-50" onClick={() => connect({ connector: okxWalletConnector })} disabled={isConnecting}>
           {isConnecting ? 'Opening OKX Wallet…' : 'Connect OKX Wallet'}
         </button>
       ) : chainId !== xLayerMainnet.id ? (
@@ -1601,10 +1601,10 @@ function MainnetApprovalPanel({ invoice, onPaid }: { invoice: Invoice; onPaid: (
         </div>
       ) : (
         <div className="mt-4">
-          {isPreparing ? <p className="rounded-xl bg-white p-4 text-sm text-ink/60">Preparing and validating the Mainnet payment…</p> : null}
+          {isPreparing ? <p className="mainnet-processing-status rounded-xl bg-white p-4 text-sm text-ink/60">Preparing and validating the Mainnet payment…</p> : null}
           {preparationError ? <p className="rounded-xl border border-rose-200 bg-rose-50 p-4 text-sm text-rose-800">{preparationError}</p> : null}
           {preflight && !isPreparing ? (
-            <div className="rounded-xl border border-ink/10 bg-white p-4">
+            <div className="mainnet-preflight-card rounded-xl border border-ink/10 bg-white p-4">
               <p className="text-sm font-semibold">{preflight.status === 'READY' ? 'Ready for final payment recheck' : preflight.status === 'HANDOFF_UNRESOLVED' ? 'Payment status unresolved' : preflight.status === 'SUBMITTED' ? 'Transaction submitted' : preflight.status === 'APPROVAL_REQUIRED' ? 'Existing exact allowance required' : 'Mainnet preflight blocked'}</p>
               <p className="mt-1 text-sm leading-6 text-ink/60">{preflight.reason}</p>
               {preflight.preparation && preparedValidationError ? <p className="mt-3 text-sm text-rose-700">{preparedValidationError}</p> : null}
@@ -1619,16 +1619,16 @@ function MainnetApprovalPanel({ invoice, onPaid }: { invoice: Invoice; onPaid: (
               ) : null}
               {preflight.status === 'APPROVAL_REQUIRED' ? <p className="mt-4 rounded-xl bg-amber-50 p-3 text-sm text-amber-900">This checkout will not request another token approval. The exact existing wNVDAx allowance must already be available.</p> : null}
               {showPayButton && preflight.preparation ? (
-                <button type="button" className="mt-4 rounded-xl bg-ink px-4 py-3 text-sm font-bold text-white disabled:cursor-wait disabled:opacity-50" onClick={() => void payPreparedMainnet()} disabled={isPaying || isWalletPromptOpen || isHandoffSignatureOpen}>
+                <button type="button" className="portpay-button portpay-button--primary mt-4 rounded-xl bg-ink px-4 py-3 text-sm font-bold text-white disabled:cursor-wait disabled:opacity-50" onClick={() => void payPreparedMainnet()} disabled={isPaying || isWalletPromptOpen || isHandoffSignatureOpen}>
                   {`Pay ${formatUnits(BigInt(preflight.preparation.amount), 18)} wNVDAx`}
                 </button>
               ) : null}
-              {payStage === 'rechecking' ? <p className="mt-3 text-sm text-ink/60">Rechecking invoice, buyer, chain, exact allowance, balances, Builder Code, expiry, and the same persisted calldata before opening the wallet.</p> : null}
-              {payStage === 'wallet' ? <p className="mt-3 text-sm font-semibold text-ink/70">Review and confirm the exact payment in OKX Wallet. PortPay will not sign or submit it for you.</p> : null}
-              {payStage === 'observing' || payStage === 'confirming' ? <p className="mt-3 text-sm font-semibold text-ink/70">Transaction submitted; waiting for exact transaction observation and canonical settlement confirmation.</p> : null}
+              {payStage === 'rechecking' ? <p className="payment-progress-note mt-3 text-sm text-ink/60">Rechecking invoice, buyer, chain, exact allowance, balances, Builder Code, expiry, and the same persisted calldata before opening the wallet.</p> : null}
+              {payStage === 'wallet' ? <p className="payment-progress-note payment-progress-note--wallet mt-3 text-sm font-semibold text-ink/70">Review and confirm the exact payment in OKX Wallet. PortPay will not sign or submit it for you.</p> : null}
+              {payStage === 'observing' || payStage === 'confirming' ? <p className="payment-progress-note payment-progress-note--active mt-3 text-sm font-semibold text-ink/70">Transaction submitted; waiting for exact transaction observation and canonical settlement confirmation.</p> : null}
               {payStage === 'unresolved' ? <p className="mt-3 text-sm font-semibold text-amber-900">Payment status unresolved. This invoice cannot be retried. Check the buyer wallet before the merchant creates a new invoice.</p> : null}
               {transactionHash ? <p className="mt-3 text-xs text-ink/65">Settlement transaction: <a className="font-mono font-semibold underline" href={explorerUrl} target="_blank" rel="noreferrer">{transactionHash}</a></p> : null}
-              {payError ? <p className="mt-3 text-sm text-rose-700">{payError}</p> : null}
+              {payError ? <p className={`mt-3 rounded-xl border p-3 text-sm leading-6 ${payError.startsWith('Wallet authorization was cancelled') ? 'wallet-cancelled-note' : 'mainnet-pay-error'}`}>{payError}</p> : null}
               {transactionHash && submissionRecovery && payStage === 'error' ? (
                 <button type="button" className="mt-3 rounded-lg border border-ink/15 px-3 py-2 text-sm font-semibold text-ink disabled:opacity-50" onClick={() => void observeSameMainnetTransaction(submissionRecovery, true)} disabled={isPaying || isWalletPromptOpen}>
                   Retry the same transaction check
@@ -1691,8 +1691,8 @@ function BuyerCheckoutPage({ invoiceId, paymentNetwork, onBack, onOpenBuyerInvoi
   }, [invoiceId]);
 
   return (
-    <section className="portpay-appear flex flex-1 items-center justify-center py-8 sm:py-12">
-      <div className="w-full max-w-4xl rounded-[1.75rem] border border-ink/10 bg-paper p-5 shadow-soft sm:p-8">
+    <section className="portpay-appear buyer-checkout flex flex-1 items-center justify-center py-8 sm:py-12">
+      <div className="buyer-checkout-card w-full max-w-4xl rounded-[1.75rem] border border-ink/10 bg-paper p-5 shadow-soft sm:p-8">
         <button type="button" className="text-sm font-semibold text-ink/50 transition hover:text-ink" onClick={onBack}>
           ← Back to PortPay
         </button>
@@ -1718,23 +1718,23 @@ function BuyerCheckoutPage({ invoiceId, paymentNetwork, onBack, onOpenBuyerInvoi
             <div className="flex flex-wrap items-center justify-between gap-3">
               <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-ink/45">{isMainnet ? 'PortPay checkout · Mainnet preparation' : 'Historical internal receipt'}</p>
               {isMainnet
-                ? <span className="rounded-full bg-amber-100 px-3 py-1 text-[10px] font-bold uppercase tracking-[0.12em] text-amber-950">X Layer Mainnet · 196</span>
-                : <span className="rounded-full bg-cloud px-3 py-1 text-[10px] font-bold uppercase tracking-[0.12em] text-ink/60">Legacy X Layer Testnet · 1952</span>}
+                ? <span className="checkout-network-pill rounded-full bg-amber-100 px-3 py-1 text-[10px] font-bold uppercase tracking-[0.12em] text-amber-950">X Layer Mainnet · 196</span>
+                : <span className="checkout-network-pill rounded-full bg-cloud px-3 py-1 text-[10px] font-bold uppercase tracking-[0.12em] text-ink/60">Legacy X Layer Testnet · 1952</span>}
             </div>
             <div className="mt-6 grid gap-5 lg:grid-cols-[1fr_auto] lg:items-end">
               <div>
                 <p className="text-sm font-semibold text-ink/45">You are paying</p>
                 <h1 className="mt-2 text-3xl font-semibold tracking-tight sm:text-4xl">{invoice.title}</h1>
               </div>
-              <div className="rounded-2xl bg-ink px-5 py-4 text-white lg:min-w-56 lg:text-right">
+              <div className="amount-due-card rounded-2xl bg-ink px-5 py-4 text-white lg:min-w-56 lg:text-right">
                 <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-white/50">Amount due</p>
                 <p className="mt-1 text-3xl font-semibold tracking-tight">{invoice.amountUsdt0} <span className="text-base text-mint">USD₮0</span></p>
               </div>
             </div>
 
-            <div className={`mt-8 rounded-2xl p-5 ${invoice.status === 'paid' ? 'border border-emerald-200 bg-emerald-50' : 'border border-ink/10 bg-cloud'}`}>
+            <div className={`checkout-status mt-8 rounded-2xl p-5 ${invoice.status === 'paid' ? 'checkout-status--paid border border-emerald-200 bg-emerald-50' : 'checkout-status--pending border border-ink/10 bg-cloud'}`}>
               <div className="flex items-center gap-3">
-                <span className={`grid h-8 w-8 place-items-center rounded-full text-sm font-bold ${invoice.status === 'paid' ? 'bg-emerald-600 text-white' : 'bg-amber-200 text-amber-950'}`}>
+                <span className={`checkout-status__icon grid h-8 w-8 place-items-center rounded-full text-sm font-bold ${invoice.status === 'paid' ? 'bg-emerald-600 text-white' : 'bg-amber-200 text-amber-950'}`}>
                   {invoice.status === 'paid' ? '✓' : '…'}
                 </span>
                 <p className="text-sm font-semibold">{invoice.status === 'paid' ? paymentSuccessLabel('buyer') : isMainnet ? 'Mainnet payment preparation' : 'Legacy testnet invoice'}</p>
@@ -1835,8 +1835,8 @@ function MerchantInvoicePage({ invoiceId, onBack }: { invoiceId: string; onBack:
   const invoiceNetwork = invoice ? getInvoicePaymentNetwork(invoice) : 'x-layer-mainnet';
 
   return (
-    <section className="portpay-appear flex flex-1 items-center justify-center py-8 sm:py-12">
-      <div className="w-full max-w-4xl rounded-[1.75rem] border border-ink/10 bg-paper p-5 shadow-soft sm:p-8">
+    <section className="portpay-appear merchant-invoice flex flex-1 items-center justify-center py-8 sm:py-12">
+      <div className="merchant-invoice-card w-full max-w-4xl rounded-[1.75rem] border border-ink/10 bg-paper p-5 shadow-soft sm:p-8">
         <button type="button" className="text-sm font-semibold text-ink/50 transition hover:text-ink" onClick={onBack}>
           ← Back to merchant workspace
         </button>
@@ -1861,18 +1861,18 @@ function MerchantInvoicePage({ invoiceId, onBack }: { invoiceId: string; onBack:
             </div>
 
             <div className="mt-6 grid gap-4 sm:grid-cols-2">
-              <div className="rounded-2xl bg-ink p-5 text-white">
+              <div className="merchant-amount-card rounded-2xl bg-ink p-5 text-white">
                 <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-white/50">Requested stablecoin amount</p>
                 <p className="mt-2 text-3xl font-semibold tracking-tight">{invoice.amountUsdt0} <span className="text-sm text-mint">USD₮0</span></p>
               </div>
-              <div className="rounded-2xl border border-ink/10 bg-cloud p-5">
+              <div className="payment-link-card rounded-2xl border border-ink/10 bg-cloud p-5">
                 <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-ink/45">Buyer payment link</p>
                 <p className="mt-2 break-all font-mono text-xs text-ink/65">{invoice.paymentUrl}</p>
                 <div className="mt-3"><CopyButton value={invoice.paymentUrl} /></div>
               </div>
             </div>
 
-            <div className={`mt-5 rounded-2xl p-5 ${invoice.status === 'paid' ? 'border border-emerald-200 bg-emerald-50' : 'border border-ink/10 bg-cloud'}`}>
+            <div className={`invoice-status-banner mt-5 rounded-2xl p-5 ${invoice.status === 'paid' ? 'invoice-status-banner--paid border border-emerald-200 bg-emerald-50' : invoice.mainnetAttemptStatus === 'unresolved' ? 'invoice-status-banner--unresolved border border-rose-200 bg-rose-50' : 'invoice-status-banner--pending border border-ink/10 bg-cloud'}`}>
                <p className="text-sm font-semibold">{invoice.status === 'paid' ? 'Payment received' : invoice.mainnetAttemptStatus === 'unresolved' ? 'Payment status unresolved' : invoice.mainnetAttemptStatus === 'submitted' ? 'Payment submitted, awaiting verification' : 'Waiting for payment'}</p>
                <p className="mt-2 text-sm leading-6 text-ink/55">
                  {invoice.status === 'paid'
@@ -1906,16 +1906,16 @@ function PaymentReceipt({ invoice, role }: { invoice: Invoice; role: 'buyer' | '
   const isBuyer = role === 'buyer';
 
   return (
-    <section className="mt-6 rounded-[1.5rem] border border-emerald-200 bg-emerald-50 p-5 shadow-panel sm:p-6">
-      <div className="flex flex-wrap items-start justify-between gap-3">
+    <section className={`payment-receipt ${isBuyer ? 'payment-receipt--buyer' : 'payment-receipt--merchant'} mt-6 rounded-[1.5rem] border border-emerald-200 bg-emerald-50 p-5 shadow-panel sm:p-6`}>
+      <div className="payment-receipt__header flex flex-wrap items-start justify-between gap-3">
         <div>
           <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-emerald-800">{isBuyer ? 'Buyer receipt' : 'Merchant receipt'}</p>
-          <h2 className="mt-2 text-2xl font-semibold tracking-tight text-emerald-950">{paymentSuccessLabel(role)}</h2>
+          <h2 className="payment-receipt__title mt-2 text-2xl font-semibold tracking-tight text-emerald-950"><span className="payment-receipt__success-mark" aria-hidden="true">✓</span>{paymentSuccessLabel(role)}</h2>
         </div>
         <InvoiceStatusPill status={invoice.status} label={isBuyer ? 'Payment confirmed' : undefined} />
       </div>
 
-      <div className="mt-6 flex flex-col gap-4 rounded-2xl bg-white/65 p-4 sm:flex-row sm:items-center sm:justify-between sm:p-5">
+      <div className="payment-receipt__summary mt-6 flex flex-col gap-4 rounded-2xl bg-white/65 p-4 sm:flex-row sm:items-center sm:justify-between sm:p-5">
         <div>
           <p className="text-xs font-semibold uppercase tracking-[0.14em] text-emerald-900/55">{isBuyer ? 'You paid' : 'You received'}</p>
           <p className="mt-1 text-3xl font-semibold tracking-tight text-emerald-950">{isBuyer ? formatSpentAmount(invoice) : formatReceivedAmount(invoice)}</p>
@@ -1976,7 +1976,7 @@ function PaymentReceipt({ invoice, role }: { invoice: Invoice; role: 'buyer' | '
           <p className="mt-1 text-emerald-950">Transaction evidence unavailable.</p>
         )}
         {explorerUrl ? (
-          <a className="mt-3 inline-flex items-center rounded-xl bg-emerald-900 px-4 py-2.5 font-semibold text-white transition hover:-translate-y-0.5 hover:bg-emerald-950" href={explorerUrl} target="_blank" rel="noreferrer">
+          <a className="portpay-button portpay-button--receipt mt-3 inline-flex items-center rounded-xl bg-emerald-900 px-4 py-2.5 font-semibold text-white transition hover:-translate-y-0.5 hover:bg-emerald-950" href={explorerUrl} target="_blank" rel="noreferrer">
             View on X Layer Explorer <span className="ml-2 text-mint">↗</span>
           </a>
         ) : null}
@@ -2007,7 +2007,7 @@ function AppShell({ children }: { children: React.ReactNode }) {
   return (
     <main className="portpay-shell min-h-screen overflow-hidden bg-cloud text-ink">
       <div className="mx-auto flex min-h-screen max-w-6xl flex-col px-5 py-5 sm:px-8 sm:py-7 lg:px-12">
-        <header className="flex items-center justify-between border-b border-ink/10 pb-5">
+        <header className="app-header flex items-center justify-between border-b border-ink/10 pb-5">
           <div className="flex items-center gap-3">
             <span className="grid h-10 w-10 place-items-center rounded-2xl bg-ink text-lg font-bold text-mint shadow-sm">P</span>
             <div>

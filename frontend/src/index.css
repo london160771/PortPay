@@ -5,10 +5,11 @@
 :root {
   font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   color: #09111f;
-  background: #eef3f5;
+  background: #f1f4ff;
   font-synthesis: none;
   text-rendering: optimizeLegibility;
   font-smoothing: antialiased;
+  font-optical-sizing: auto;
 }
 
 * {
@@ -18,10 +19,7 @@
 body {
   margin: 0;
   min-width: 320px;
-  background:
-    radial-gradient(circle at 12% -10%, rgba(186, 243, 210, 0.62), transparent 30rem),
-    radial-gradient(circle at 92% 0%, rgba(92, 124, 250, 0.08), transparent 24rem),
-    #eef3f5;
+  background: #f1f4ff;
 }
 
 button,
@@ -44,19 +42,22 @@ input:focus-visible {
 
 .portpay-shell {
   background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.52), rgba(255, 255, 255, 0) 18rem),
-    transparent;
+    radial-gradient(ellipse at 8% 0%, rgba(89, 126, 255, 0.14), transparent 32rem),
+    radial-gradient(ellipse at 94% 12%, rgba(156, 132, 255, 0.12), transparent 28rem),
+    radial-gradient(ellipse at 48% 100%, rgba(82, 201, 226, 0.1), transparent 36rem),
+    linear-gradient(135deg, #f4f6ff 0%, #f7f9ff 50%, #f1f5ff 100%);
 }
 
 .portpay-grid {
-  background-image: linear-gradient(rgba(9, 17, 31, 0.035) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(9, 17, 31, 0.035) 1px, transparent 1px);
-  background-size: 32px 32px;
-  mask-image: linear-gradient(to bottom, black, transparent 90%);
+  display: block;
+  opacity: 0.1;
+  background-image: radial-gradient(rgba(88, 112, 211, 0.48) 1px, transparent 1px);
+  background-size: 14px 14px;
+  mask-image: radial-gradient(ellipse at 92% 12%, #000 0%, transparent 67%);
 }
 
 .portpay-appear {
-  animation: portpay-appear 480ms ease-out both;
+  animation: portpay-appear 420ms cubic-bezier(0.2, 0.7, 0.2, 1) both;
 }
 
 @keyframes portpay-appear {
@@ -73,5 +74,1043 @@ input:focus-visible {
 @media (prefers-reduced-motion: reduce) {
   .portpay-appear {
     animation: none;
+  }
+}
+
+.app-header {
+  border-color: rgba(114, 135, 206, 0.2);
+}
+
+.app-header > div:first-child > span:first-child {
+  background: linear-gradient(145deg, #1768ee, #6652e6);
+  color: #fff;
+  box-shadow: 0 7px 16px rgba(53, 92, 230, 0.2);
+}
+
+.app-header nav a:hover {
+  color: #2455c5;
+}
+
+.app-header nav > span:last-child {
+  border-color: #dce5fb;
+  background: rgba(255, 255, 255, 0.78);
+  color: #536b9c;
+}
+
+.portpay-shell .merchant-hero {
+  align-items: start;
+  gap: 1.5rem;
+  padding-top: 1.5rem;
+  padding-bottom: 1.5rem;
+}
+
+.merchant-hero__title {
+  font-weight: 500;
+  line-height: 1.08;
+  letter-spacing: -0.045em;
+  text-wrap: balance;
+}
+
+.wallet-panel {
+  border: 1px solid rgba(122, 145, 222, 0.2);
+  border-radius: 1rem;
+  background: rgba(255, 255, 255, 0.88);
+  box-shadow: 0 12px 32px rgba(62, 86, 170, 0.07);
+  backdrop-filter: blur(14px);
+  padding: 1.15rem;
+}
+
+.wallet-balance-card,
+.merchant-metric,
+.merchant-form-card,
+.merchant-invoice-list,
+.buyer-checkout-card,
+.merchant-invoice-card,
+.payment-receipt {
+  box-shadow: 0 5px 18px rgba(9, 17, 31, 0.035);
+}
+
+.wallet-balance-card,
+.merchant-metric,
+.merchant-form-card,
+.merchant-invoice-list,
+.mainnet-payment-panel,
+.buyer-checkout-card,
+.merchant-invoice-card,
+.payment-receipt {
+  transition: border-color 180ms ease, box-shadow 180ms ease, transform 180ms ease;
+}
+
+.wallet-balance-card:hover,
+.merchant-metric:hover {
+  border-color: rgba(9, 17, 31, 0.13);
+  box-shadow: 0 8px 22px rgba(9, 17, 31, 0.06);
+}
+
+.merchant-metric {
+  border-radius: 0.85rem;
+  border-color: #e0e6f4;
+  background: linear-gradient(150deg, rgba(255, 255, 255, 0.96), rgba(246, 248, 255, 0.94));
+  padding: 0.9rem 1rem;
+}
+
+.merchant-metric p:nth-child(2) {
+  font-variant-numeric: tabular-nums;
+}
+
+.merchant-metric--paid {
+  border-color: #dcebe1;
+  background: #edf6f0;
+  color: #173d2a;
+  box-shadow: none;
+}
+
+.merchant-metric--paid p {
+  color: #52675a;
+}
+
+.merchant-metric--paid p:first-child {
+  color: #26734a;
+}
+
+.merchant-metric:not(.merchant-metric--paid) p:first-child {
+  color: #7180a1;
+}
+
+.merchant-metric > p:nth-child(2) {
+  color: #17244b;
+  font-size: 1.75rem;
+  font-weight: 500;
+}
+
+.merchant-form-card,
+.merchant-invoice-list {
+  border-radius: 1rem;
+  border-color: rgba(9, 17, 31, 0.085);
+  padding: 1.2rem;
+}
+
+.merchant-form-card {
+  border-color: rgba(117, 139, 217, 0.2);
+  background:
+    radial-gradient(circle at 100% 0%, rgba(97, 131, 255, 0.065), transparent 15rem),
+    rgba(255, 255, 255, 0.92);
+  box-shadow: 0 14px 36px rgba(62, 86, 170, 0.07);
+  backdrop-filter: blur(14px);
+}
+
+.portpay-input,
+.portpay-input-group {
+  transition: border-color 160ms ease, background-color 160ms ease, box-shadow 160ms ease;
+}
+
+.portpay-input:focus,
+.portpay-input-group:focus-within {
+  border-color: rgba(69, 106, 232, 0.65);
+  box-shadow: 0 0 0 3px rgba(69, 106, 232, 0.11);
+  background-color: #fff;
+}
+
+.merchant-form-card input,
+.merchant-form-card .portpay-input-group {
+  min-height: 2.65rem;
+  border-color: #d7deed;
+  border-radius: 0.65rem;
+  background-color: #fff;
+}
+
+.merchant-form-card label > span:first-child {
+  color: #263451;
+  font-size: 0.82rem;
+  font-weight: 500;
+}
+
+.portpay-button {
+  min-height: 2.4rem;
+  border-radius: 0.65rem;
+  font-size: 0.84rem;
+  font-weight: 500;
+  padding: 0.55rem 0.9rem;
+  transition: transform 160ms ease, box-shadow 160ms ease, background-color 160ms ease, border-color 160ms ease;
+}
+
+.portpay-button:not(:disabled):hover {
+  transform: translateY(-1px);
+  box-shadow: 0 10px 22px rgba(9, 17, 31, 0.15);
+}
+
+.portpay-button:active {
+  transform: translateY(0);
+}
+
+.portpay-button--primary {
+  background: linear-gradient(105deg, #1768ee 0%, #345ced 55%, #6953e8 100%);
+  color: #fff;
+  box-shadow: 0 7px 16px rgba(53, 92, 230, 0.2);
+}
+
+.portpay-button--primary:not(:disabled):hover {
+  background: linear-gradient(105deg, #0d5bd9 0%, #294edc 55%, #5c46d9 100%);
+  box-shadow: 0 10px 20px rgba(53, 92, 230, 0.27);
+}
+
+.portpay-button--network {
+  border: 1px solid #f0dcaa;
+  background: #fff8e8;
+  color: #775816;
+}
+
+.copy-link-button {
+  border: 1px solid #d7e2ff;
+  background: #f1f5ff;
+  color: #2455c5;
+  box-shadow: none;
+}
+
+.copy-link-button:not(:disabled):hover {
+  border-color: #b9caff;
+  background: #e8efff;
+  box-shadow: 0 6px 14px rgba(62, 98, 205, 0.12);
+}
+
+.merchant-hero a {
+  border-radius: 0.65rem;
+  font-size: 0.84rem;
+  font-weight: 500;
+  padding: 0.62rem 0.95rem;
+}
+
+.merchant-hero a:first-child {
+  background: linear-gradient(105deg, #1768ee 0%, #345ced 55%, #6953e8 100%);
+  box-shadow: 0 7px 16px rgba(53, 92, 230, 0.2);
+  color: #fff;
+}
+
+.merchant-hero a:first-child span {
+  color: #dbe9ff;
+}
+
+.merchant-hero a:last-child {
+  border-color: #d8e0f5;
+  background: rgba(255, 255, 255, 0.7);
+  color: #586985;
+}
+
+.buyer-checkout-card,
+.merchant-invoice-card {
+  border-radius: 1rem;
+  border-color: rgba(122, 145, 222, 0.22);
+  background: rgba(255, 255, 255, 0.94);
+  box-shadow: 0 16px 42px rgba(62, 86, 170, 0.09);
+  backdrop-filter: blur(16px);
+  padding: 1.25rem;
+}
+
+.amount-due-card,
+.merchant-amount-card {
+  border: 1px solid #d8e2fb;
+  border-radius: 0.85rem;
+  background: linear-gradient(135deg, #f2f6ff 0%, #f7f8ff 65%, #f2f1ff 100%);
+  box-shadow: none;
+  color: #17244b;
+  padding: 1rem;
+}
+
+.amount-due-card p:first-child,
+.merchant-amount-card p:first-child {
+  color: #7180a1;
+}
+
+.amount-due-card p:last-child,
+.merchant-amount-card p:last-child {
+  color: #17244b;
+  font-size: 1.55rem;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+}
+
+.amount-due-card span,
+.merchant-amount-card span {
+  color: #4167d9;
+}
+
+.checkout-status,
+.invoice-status-banner,
+.mainnet-payment-panel,
+.mainnet-preflight-card {
+  border-radius: 0.85rem;
+}
+
+.checkout-status,
+.invoice-status-banner {
+  padding: 0.9rem 1rem;
+}
+
+.checkout-status--paid,
+.invoice-status-banner--paid {
+  border-color: #d5ebde;
+  background-image: linear-gradient(120deg, rgba(239, 252, 244, 0.94), rgba(232, 248, 239, 0.94));
+}
+
+.invoice-status-banner--unresolved {
+  border-color: #f0d6d8;
+  background: #fff5f5;
+  color: #5b1e2a;
+}
+
+.mainnet-payment-panel {
+  border-color: #dce4f4;
+  background: linear-gradient(145deg, rgba(248, 250, 255, 0.96), rgba(243, 246, 255, 0.96));
+  padding: 1rem;
+}
+
+.mainnet-preflight-card {
+  border-color: #dfe5f3;
+  box-shadow: 0 6px 18px rgba(62, 86, 170, 0.045);
+}
+
+.mainnet-processing-status,
+.payment-progress-note {
+  border: 1px solid #dce5fb;
+  background: linear-gradient(105deg, #f3f7ff, #f7f7ff);
+  color: #4f5f7e;
+}
+
+.mainnet-processing-status::before,
+.payment-progress-note--active::before {
+  display: inline-block;
+  width: 0.9rem;
+  height: 0.9rem;
+  margin-right: 0.55rem;
+  border: 2px solid #c4d2f9;
+  border-top-color: #3568e8;
+  border-radius: 999px;
+  content: '';
+  vertical-align: -0.14rem;
+  animation: portpay-spin 900ms linear infinite;
+}
+
+.payment-progress-note--wallet::before {
+  display: inline-block;
+  width: 0.45rem;
+  height: 0.45rem;
+  margin-right: 0.55rem;
+  border-radius: 999px;
+  background: #4a70e6;
+  content: '';
+  vertical-align: 0.08rem;
+  animation: portpay-pulse 1.5s ease-in-out infinite;
+}
+
+@keyframes portpay-spin {
+  to { transform: rotate(360deg); }
+}
+
+@keyframes portpay-pulse {
+  50% { opacity: 0.4; transform: scale(0.82); }
+}
+
+.wallet-cancelled-note {
+  border-color: #f2d7a2;
+  background: #fff8e8;
+  color: #704d12;
+}
+
+.mainnet-pay-error {
+  border-color: #f2c6ca;
+  background: #fff1f2;
+  color: #8f2637;
+}
+
+.payment-link-card {
+  border-color: #e0e6f4;
+  border-radius: 0.85rem;
+  background: rgba(255, 255, 255, 0.82);
+  padding: 1rem;
+}
+
+.payment-receipt {
+  border: 1px solid #dce4f5;
+  border-radius: 0.9rem;
+  background: rgba(255, 255, 255, 0.95);
+  box-shadow: 0 12px 32px rgba(62, 86, 170, 0.065);
+  padding: 1.2rem;
+}
+
+.payment-receipt h2 {
+  color: #172033;
+  font-size: 1.3rem;
+  font-weight: 500;
+}
+
+.payment-receipt dt {
+  color: #687385;
+}
+
+.payment-receipt dd,
+.payment-receipt > p {
+  color: #263244;
+}
+
+.payment-receipt__summary {
+  border: 1px solid #e0e7f5;
+  border-radius: 0.75rem;
+  background: linear-gradient(145deg, #fbfcff, #f6f8ff);
+  box-shadow: none;
+  padding: 0.9rem 1rem;
+}
+
+.payment-receipt__summary p.text-3xl {
+  font-size: 1.55rem;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+}
+
+.payment-receipt__summary p.text-lg {
+  font-size: 1.1rem;
+  font-weight: 500;
+}
+
+.payment-receipt__header {
+  align-items: center;
+}
+
+.payment-receipt__title {
+  display: flex;
+  align-items: center;
+  gap: 0.7rem;
+  color: #17244b !important;
+  font-weight: 500 !important;
+}
+
+.payment-receipt__success-mark {
+  display: inline-grid;
+  width: 2.15rem;
+  height: 2.15rem;
+  flex: 0 0 auto;
+  place-items: center;
+  border: 1px solid rgba(255, 255, 255, 0.75);
+  border-radius: 50%;
+  background: linear-gradient(145deg, #2ebc78, #14985d);
+  box-shadow: 0 5px 14px rgba(27, 161, 99, 0.19), 0 0 0 4px rgba(37, 183, 118, 0.09);
+  color: #fff;
+  font-size: 1rem;
+  animation: receipt-check-in 360ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
+}
+
+@keyframes receipt-check-in {
+  from { opacity: 0; transform: scale(0.82); }
+  to { opacity: 1; transform: scale(1); }
+}
+
+.invoice-status-pill {
+  padding: 0.2rem 0.55rem;
+  font-size: 0.68rem;
+  font-weight: 500;
+  letter-spacing: 0.015em;
+  border: 1px solid transparent;
+}
+
+.invoice-status-pill.bg-mint {
+  border-color: #cdebd9;
+  background: #e9f8ef;
+  color: #17814b;
+}
+
+.invoice-status-pill.bg-amber-100 {
+  border-color: #e6eaf3;
+  background: #f0f3fb;
+  color: #5d6b8d;
+}
+
+.payment-receipt .invoice-status-pill {
+  transition: background-color 180ms ease, border-color 180ms ease, color 180ms ease;
+}
+
+.payment-receipt--buyer .payment-receipt__summary {
+  border-color: #e1e7f3;
+  border-bottom-color: #dfe6f6;
+  background: linear-gradient(145deg, rgba(251, 252, 255, 0.72), rgba(246, 248, 255, 0.72));
+}
+
+.payment-receipt--buyer .payment-receipt__summary p.text-3xl,
+.payment-receipt--buyer .payment-receipt__summary p.text-lg {
+  color: #17244b;
+}
+
+.payment-receipt--buyer > p {
+  color: #65718a;
+}
+
+.payment-receipt--buyer dl,
+.payment-receipt--buyer dl + div {
+  border-color: #e1e7f3;
+}
+
+.payment-receipt--buyer dl > div {
+  border-color: #e9edf5;
+}
+
+.payment-receipt--buyer dt,
+.payment-receipt--buyer dl + div > p:first-child {
+  color: #73809a;
+}
+
+.payment-receipt--buyer dd,
+.payment-receipt--buyer dl + div > p:nth-child(2) {
+  color: #263452;
+}
+
+.payment-receipt--buyer .portpay-button--receipt {
+  border: 1px solid #d6e1fb;
+  background: linear-gradient(105deg, #f0f5ff, #f5f3ff);
+  box-shadow: none;
+  color: #2455c5;
+}
+
+.payment-receipt--buyer .portpay-button--receipt:hover {
+  border-color: #bdcdf6;
+  background: #eaf0ff;
+  box-shadow: 0 5px 13px rgba(62, 98, 205, 0.1);
+}
+
+.payment-receipt--buyer dl + div > div:last-of-type {
+  border-color: #e9edf5;
+  color: #65718a;
+}
+
+.payment-receipt--buyer dl + div > div:last-of-type .font-semibold {
+  color: #354563;
+}
+
+.payment-receipt--merchant .portpay-button--receipt {
+  border: 1px solid #d6e1fb;
+  background: linear-gradient(105deg, #f0f5ff, #f5f3ff);
+  box-shadow: none;
+  color: #2455c5;
+}
+
+.demo-journey-card {
+  border-radius: 1rem;
+  border-color: #e3e8ec;
+  background: #fff;
+  box-shadow: 0 5px 18px rgba(9, 17, 31, 0.035);
+  color: #172033;
+  padding: 1.2rem;
+}
+
+.demo-journey-card h2 {
+  color: #172033;
+  font-size: 1.1rem;
+  font-weight: 500;
+}
+
+.demo-journey-card p {
+  color: #566273;
+}
+
+.demo-journey-card .demo-journey-step-number {
+  color: #526176;
+}
+
+.demo-journey-card .demo-journey-step-title {
+  color: #253044;
+}
+
+.demo-journey-steps {
+  margin-top: 1.05rem;
+}
+
+.demo-journey-steps > div {
+  gap: 0.75rem;
+}
+
+.demo-journey-step-detail {
+  font-size: 0.83rem;
+  line-height: 1.5;
+}
+
+.demo-journey-icon {
+  background: linear-gradient(145deg, #edf4ff, #f1efff);
+  color: #4165d8;
+}
+
+.demo-journey-note {
+  border-color: #dce5f5;
+  background: linear-gradient(115deg, #f3f7ff, #f7f5ff);
+  color: #566273;
+}
+
+.payment-history-panel,
+.merchant-invoice-list {
+  border-color: #dce4f3;
+  background: rgba(255, 255, 255, 0.88);
+  box-shadow: 0 12px 32px rgba(62, 86, 170, 0.06);
+  backdrop-filter: blur(12px);
+}
+
+.payment-history-row {
+  border-color: #dfe5f2;
+  background: linear-gradient(145deg, rgba(255, 255, 255, 0.95), rgba(247, 249, 255, 0.95));
+}
+
+.payment-history-row:hover {
+  border-color: #c5d3fa;
+  box-shadow: 0 8px 22px rgba(62, 98, 205, 0.08);
+}
+
+.merchant-invoice-row {
+  border-radius: 0.6rem;
+}
+
+.merchant-invoice-row:hover {
+  background: #f4f7ff;
+}
+
+.merchant-invoice-row__title {
+  color: #1d2b4b;
+  font-weight: 500;
+}
+
+.merchant-invoice-row__meta {
+  color: #7a8498;
+}
+
+.merchant-invoice-row__amount > span:first-child {
+  color: #253452;
+  font-variant-numeric: tabular-nums;
+  font-weight: 500;
+}
+
+.merchant-invoice-list > div > button {
+  padding-block: 0.7rem;
+}
+
+.portpay-shell .font-bold {
+  font-weight: 600;
+}
+
+.portpay-shell .font-semibold {
+  font-weight: 500;
+}
+
+.portpay-shell .text-6xl {
+  font-size: clamp(1.9rem, 2.8vw, 2.35rem);
+  line-height: 1.08;
+}
+
+.portpay-shell .text-4xl {
+  font-size: 2rem;
+  line-height: 1.15;
+}
+
+.portpay-shell .text-3xl {
+  font-size: 1.65rem;
+  line-height: 1.25;
+}
+
+.portpay-shell .text-2xl {
+  font-size: 1.35rem;
+  line-height: 1.3;
+}
+
+.portpay-shell .text-xl {
+  font-size: 1.1rem;
+  line-height: 1.4;
+}
+
+.portpay-shell button {
+  border-radius: 0.65rem;
+  font-weight: 500;
+  font-size: 0.86rem;
+  padding-block: 0.58rem;
+}
+
+@media (max-width: 639px) {
+  .merchant-hero {
+    padding-top: 1.1rem;
+    padding-bottom: 1.1rem;
+  }
+
+  .merchant-hero__title {
+    max-width: 100%;
+  }
+
+  .portpay-shell .text-6xl {
+    font-size: clamp(1.85rem, 6.5vw, 2.15rem);
+  }
+
+  .buyer-checkout-card,
+  .merchant-invoice-card {
+    border-radius: 0.9rem;
+    padding: 1rem;
+  }
+
+  .payment-receipt__summary {
+    gap: 0.75rem;
+  }
+
+  .wallet-panel,
+  .demo-journey-card,
+  .merchant-form-card,
+  .merchant-invoice-list,
+  .payment-receipt {
+    padding: 1rem;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/* Buyer receipt: compact, transaction-led presentation. */
+.payment-receipt--buyer {
+  margin-top: 1rem;
+  padding: 1rem;
+  border-color: #e2e7eb;
+  border-radius: 0.8rem;
+  box-shadow: none;
+}
+
+.payment-receipt--buyer > div:first-child {
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.payment-receipt--buyer h2 {
+  margin-top: 0.2rem;
+  color: #172033;
+  font-size: 1.1rem;
+  font-weight: 500;
+  line-height: 1.35;
+  letter-spacing: -0.015em;
+}
+
+.payment-receipt--buyer > div:first-child p {
+  color: #758091;
+  font-size: 0.67rem;
+  font-weight: 400;
+  letter-spacing: 0.09em;
+}
+
+.payment-receipt--buyer .invoice-status-pill {
+  padding: 0.18rem 0.48rem;
+  font-size: 0.64rem;
+  font-weight: 500;
+}
+
+.payment-receipt--buyer .payment-receipt__summary {
+  margin-top: 0.9rem;
+  gap: 0.7rem;
+  border: 0;
+  border-bottom: 1px solid #e8edf0;
+  border-radius: 0;
+  background: transparent;
+  padding: 0 0 0.85rem;
+}
+
+.payment-receipt--buyer .payment-receipt__summary p:first-child {
+  color: #778293;
+  font-size: 0.68rem;
+  font-weight: 400;
+  letter-spacing: 0.065em;
+}
+
+.payment-receipt--buyer .payment-receipt__summary p.text-3xl {
+  color: #172033;
+  font-size: 1.3rem;
+  font-weight: 500;
+  line-height: 1.35;
+}
+
+.payment-receipt--buyer .payment-receipt__summary p.text-lg {
+  color: #263244;
+  font-size: 0.98rem;
+  font-weight: 500;
+}
+
+.payment-receipt--buyer > p {
+  margin-top: 0.8rem;
+  color: #687385;
+  font-size: 0.8rem;
+  line-height: 1.5;
+}
+
+.payment-receipt--buyer dl {
+  margin-top: 0.85rem;
+  gap: 0.35rem 1.25rem;
+  border-color: #e8edf0;
+  padding-top: 0.75rem;
+  font-size: 0.8rem;
+}
+
+.payment-receipt--buyer dl > div {
+  border-bottom: 1px solid #eef1f3;
+  padding-bottom: 0.55rem;
+}
+
+.payment-receipt--buyer dt {
+  color: #778293;
+  font-size: 0.7rem;
+  font-weight: 400;
+}
+
+.payment-receipt--buyer dd {
+  margin-top: 0.2rem;
+  color: #263244;
+  font-weight: 500;
+  line-height: 1.45;
+}
+
+.payment-receipt--buyer dl + div {
+  margin-top: 0.8rem;
+  border-color: #e8edf0;
+  padding-top: 0.75rem;
+  font-size: 0.8rem;
+}
+
+.payment-receipt--buyer dl + div > p:first-child {
+  color: #778293;
+  font-size: 0.7rem;
+  font-weight: 400;
+}
+
+.payment-receipt--buyer dl + div > p:nth-child(2) {
+  color: #263244;
+  font-size: 0.72rem;
+}
+
+.payment-receipt--buyer .portpay-button--receipt {
+  min-height: 2rem;
+  border-radius: 0.55rem;
+  padding: 0.42rem 0.7rem;
+  font-size: 0.76rem;
+  font-weight: 500;
+}
+
+.payment-receipt--buyer dl + div > div:last-of-type {
+  margin-top: 0.7rem;
+  border: 0;
+  border-top: 1px solid #eef1f3;
+  border-radius: 0;
+  background: transparent;
+  padding: 0.65rem 0 0;
+  color: #687385;
+}
+
+.payment-receipt--buyer dl + div > div:last-of-type .font-semibold {
+  color: #364255;
+}
+
+@media (max-width: 639px) {
+  .payment-receipt--buyer {
+    padding: 0.85rem;
+  }
+
+  .payment-receipt--buyer .payment-receipt__summary p.text-3xl {
+    font-size: 1.2rem;
+  }
+}
+
+/* Reference-aligned receipt finish: quiet rows, clear values, restrained success. */
+.portpay-shell .payment-receipt__title {
+  font-size: 1.2rem;
+  font-weight: 500;
+  letter-spacing: -0.025em;
+}
+
+.payment-receipt--buyer {
+  border-color: #dce4f5;
+  border-radius: 0.9rem;
+  background: rgba(255, 255, 255, 0.95);
+  box-shadow: 0 12px 32px rgba(62, 86, 170, 0.065);
+}
+
+.payment-receipt--buyer .payment-receipt__summary {
+  border: 1px solid #e0e7f5;
+  border-radius: 0.75rem;
+  background: linear-gradient(145deg, #fbfcff, #f4f7ff);
+  padding: 0.8rem 0.9rem;
+}
+
+.payment-receipt--buyer .payment-receipt__summary p:first-child {
+  color: #7180a1;
+}
+
+.payment-receipt--buyer .payment-receipt__summary p.text-3xl {
+  color: #18264d;
+  font-size: 1.4rem;
+  font-weight: 500;
+}
+
+.payment-receipt--buyer .payment-receipt__summary p.text-lg {
+  color: #26375f;
+  font-size: 1rem;
+  font-weight: 500;
+}
+
+.payment-receipt--buyer > p {
+  color: #65718a;
+}
+
+.payment-receipt--buyer dl > div {
+  border-color: #e8edf6;
+}
+
+.payment-receipt--buyer dt {
+  color: #7180a1;
+}
+
+.payment-receipt--buyer dd {
+  color: #263452;
+}
+
+.payment-receipt--buyer .invoice-status-pill.bg-mint {
+  border-color: #cdebd9;
+  background: #e9f8ef;
+  color: #17814b;
+}
+
+.payment-receipt--buyer .portpay-button--receipt {
+  border: 1px solid #d6e1fb;
+  background: linear-gradient(105deg, #eff5ff, #f4f2ff);
+  color: #2455c5;
+}
+
+.payment-receipt--buyer dl + div > div:last-of-type {
+  border-color: #e8edf6;
+  background: linear-gradient(120deg, #f7f9ff, #faf9ff);
+  color: #65718a;
+}
+
+.payment-receipt--merchant .payment-receipt__summary {
+  border-color: #e0e7f5;
+  background: linear-gradient(145deg, #fbfcff, #f4f7ff);
+}
+
+.payment-receipt--merchant .payment-receipt__summary p.text-3xl,
+.payment-receipt--merchant .payment-receipt__summary p.text-lg {
+  color: #18264d;
+}
+
+.payment-receipt--merchant .portpay-button--receipt {
+  border: 1px solid #d6e1fb;
+  background: linear-gradient(105deg, #eff5ff, #f4f2ff);
+  color: #2455c5;
+}
+
+.checkout-network-pill,
+.payment-network-pill {
+  border: 1px solid #d8e2fa;
+  background: #f0f4ff;
+  color: #536b9c;
+  font-weight: 500;
+}
+
+.checkout-status--pending {
+  border-color: #dce5fb;
+  background: linear-gradient(120deg, #f4f7ff, #f8f7ff);
+}
+
+.checkout-status--pending .checkout-status__icon {
+  border: 1px solid #dce5fb;
+  background: #eaf0ff;
+  color: #4868c5;
+}
+
+.checkout-status--paid .checkout-status__icon {
+  box-shadow: 0 0 0 4px rgba(37, 183, 118, 0.1);
+}
+
+.merchant-invoice-list > div > button {
+  border-radius: 0.65rem;
+  transition: background-color 160ms ease, color 160ms ease;
+}
+
+.merchant-invoice-list > div > button:hover {
+  background: #f3f6ff;
+}
+
+.payment-link-ready {
+  border-color: #d2e9dc;
+  background: linear-gradient(120deg, #f0faf4, #f4f8ff);
+}
+
+.wallet-balance-card {
+  border-color: #e1e7f4;
+  background: linear-gradient(145deg, #fff, #f8faff);
+}
+
+.buyer-checkout-card h1,
+.merchant-invoice-card h1 {
+  color: #17244b;
+  font-weight: 500;
+}
+
+.invoice-status-banner--pending {
+  border-color: #dce5fb;
+  background: linear-gradient(120deg, #f4f7ff, #f8f7ff);
+}
+
+.invoice-status-banner--pending > p:first-child {
+  color: #304b91;
+}
+
+.merchant-invoice-card .payment-link-card code,
+.merchant-invoice-card .payment-link-card p.font-mono {
+  color: #435b96;
+}
+
+@media (max-width: 639px) {
+  .portpay-shell > div {
+    padding-inline: 1rem;
+  }
+
+  .merchant-hero {
+    gap: 1rem;
+  }
+
+  .merchant-metric {
+    padding: 0.8rem 0.9rem;
+  }
+
+  .merchant-form-card,
+  .merchant-invoice-list,
+  .payment-history-panel {
+    padding: 1rem;
+  }
+
+  .payment-history-row {
+    padding: 0.85rem;
+  }
+
+  .payment-receipt__header {
+    align-items: flex-start;
+  }
+}
+
+@media (max-width: 639px) {
+  .payment-receipt__success-mark {
+    width: 1.9rem;
+    height: 1.9rem;
+    font-size: 0.9rem;
+  }
+
+  .payment-receipt--buyer .payment-receipt__summary p.text-3xl {
+    font-size: 1.25rem;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .payment-receipt__success-mark,
+  .mainnet-processing-status::before,
+  .payment-progress-note--active::before,
+  .payment-progress-note--wallet::before {
+    animation: none !important;
   }
 }
