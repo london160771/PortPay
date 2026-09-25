@@ -504,9 +504,9 @@ function PaymentHistoryPanel({
 
 function DemoJourney() {
   const steps = [
-    { number: '01', title: 'Request', detail: 'Merchant sets a real USD₮0 amount and shares one hosted link.' },
-    { number: '02', title: 'Prepare', detail: 'Buyer reviews a supported tokenized asset and exact approval details.' },
-    { number: '03', title: 'Confirm & verify', detail: 'Buyer confirms the prepared payment in their wallet; PortPay verifies canonical evidence before marking the invoice paid.' },
+    { number: '01', title: 'Request', detail: 'Merchant sets a USD₮0 amount on X Layer and shares one hosted invoice link.' },
+    { number: '02', title: 'Prepare', detail: 'Buyer selects a supported xStock and reviews exact approval and payment details.' },
+    { number: '03', title: 'Confirm & verify', detail: 'Buyer confirms in their wallet; PortPay verifies canonical onchain settlement evidence before marking the invoice paid.' },
   ];
 
   return (
@@ -594,10 +594,10 @@ function MerchantDashboard({ onOpenMerchantInvoice }: { onOpenMerchantInvoice: (
             Merchant workspace · X Layer Mainnet
           </div>
           <h1 className="merchant-hero__title max-w-3xl text-4xl font-semibold leading-[1] tracking-[-0.055em] sm:text-6xl">
-            Spend portfolios.<br /><span className="text-ink/45">Receive stablecoins.</span>
+            Spend xStocks.<br /><span className="text-ink/45">Receive stablecoins.</span>
           </h1>
           <p className="mt-5 max-w-2xl text-base leading-7 text-ink/65">
-            PortPay lets customers spend their tokenized stock portfolio while merchants receive stablecoins. Request payment in real USD₮0 and share one hosted link.
+            PortPay turns tokenized assets on X Layer into spendable money. Customers pay from supported xStocks, while merchants receive USD₮0 on X Layer through one hosted invoice link.
           </p>
           <div className="mt-8 flex flex-col gap-3 sm:flex-row sm:items-center">
             <a href="#create-invoice" className="inline-flex items-center justify-center rounded-xl bg-ink px-5 py-3.5 text-sm font-bold text-white shadow-sm transition hover:-translate-y-0.5 hover:bg-ink/85 hover:shadow-panel">
@@ -2216,23 +2216,24 @@ function DocumentationPage({ slug }: { slug: 'index' | 'getting-started' | 'how-
           <div className="rounded-[1.5rem] bg-ink p-6 text-white shadow-soft sm:p-8">
             <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-mint/75">{active.label}</p>
             <h1 className="mt-2 max-w-3xl text-3xl font-semibold tracking-tight sm:text-4xl">
-              {slug === 'index' ? 'Spend your portfolio. Merchants get stablecoins.' : active.label}
+              {slug === 'index' ? 'Spend xStocks. Receive stablecoins.' : active.label}
             </h1>
             <p className="mt-3 max-w-3xl text-sm leading-6 text-white/65">
-              PortPay lets customers spend their tokenized stock portfolio while merchants receive stablecoins.
+              The checkout layer for X Layer's RWA economy: customers pay from supported xStocks, and merchants receive USD₮0 on X Layer.
             </p>
           </div>
 
           <div className="mt-6 grid gap-5">
             {slug === 'index' ? (
               <>
-                <DocsSection title="A payment method for tokenized portfolios">
-                  <p>Businesses request payment in real USD₮0. Customers choose a supported tokenized asset; when execution is authorized, both sides receive receipts backed by verified onchain evidence.</p>
+                <DocsSection title="Why X Layer: make tokenized assets spendable">
+                  <p>X Layer is central to PortPay: it is where the supported tokenized assets and merchant settlement meet. Businesses request payment in USD₮0; customers choose a supported xStock on X Layer, and the merchant receives USD₮0 on X Layer.</p>
+                  <p>Tokenized stocks can be useful to hold or trade, but are not always easy to spend with merchants. PortPay connects supported xStocks to checkout through one hosted invoice link. The buyer explicitly confirms wallet actions, and an invoice is marked paid only after PortPay verifies canonical onchain settlement evidence.</p>
                   <p>Merchants can use the dashboard for payment links or integrate PortPay into their existing checkout through the server-side invoice API and hosted buyer checkout.</p>
                 </DocsSection>
                 <DocsSection title="The two-sided flow">
                   <div className="grid gap-3 sm:grid-cols-3">
-                    {['Merchant creates a stablecoin invoice', 'Buyer reviews a supported portfolio asset', 'Verified receipts follow an authorized settlement'].map((step, index) => (
+                    {['Merchant requests USD₮0 on X Layer', 'Buyer pays from a supported xStock', 'Verified receipts follow wallet confirmation'].map((step, index) => (
                       <div key={step} className="rounded-xl bg-cloud p-4"><span className="font-mono text-xs text-ink/40">0{index + 1}</span><p className="mt-2 font-semibold text-ink">{step}</p></div>
                     ))}
                   </div>
@@ -2245,12 +2246,12 @@ function DocumentationPage({ slug }: { slug: 'index' | 'getting-started' | 'how-
               <DocsSection title="From invoice to receipt">
                 <ol className="grid gap-3">
                   {[
-                    'Merchant creates a stablecoin invoice.',
-                    'PortPay generates a unique hosted payment link.',
+                    'Merchant requests a USD₮0 amount on X Layer.',
+                    'PortPay generates one hosted invoice link.',
                     'Buyer opens checkout and connects OKX Wallet on X Layer Mainnet.',
-                    'Buyer reviews supported wNVDAx/wAAPLx details and any allowed exact approval.',
-                    'PortPay prepares a direct-to-merchant OKX DEX route; the buyer reviews and manually confirms it in OKX Wallet.',
-                    'PortPay reconciles canonical mainnet evidence before the merchant invoice becomes paid.',
+                    'Buyer selects a supported xStock and reviews the exact payment details and any required approval.',
+                    'PortPay prepares the merchant payment in USD₮0 on X Layer; the buyer explicitly confirms it in OKX Wallet.',
+                    'PortPay verifies canonical onchain settlement evidence before the invoice becomes paid.',
                     'Buyer and merchant receive role-specific receipts from the same persisted settlement evidence.',
                   ].map((step, index) => <li key={step} className="flex gap-3"><span className="grid h-6 w-6 shrink-0 place-items-center rounded-full bg-ink text-xs font-bold text-mint">{index + 1}</span><span>{step}</span></li>)}
                 </ol>

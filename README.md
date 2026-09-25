@@ -1,10 +1,16 @@
 # PortPay
 
-Spend your portfolio. Merchants get stablecoins.
+**The checkout layer for X Layer's RWA economy.**
 
-PortPay lets customers spend tokenized stock holdings while merchants receive stablecoins. Businesses request payment in stablecoins, customers choose an xStock-style portfolio asset, PortPay handles the payment flow, and both sides receive an onchain-verifiable receipt.
+## Spend xStocks. Receive stablecoins.
 
-The core message is simple: **PortPay turns tokenized portfolios into a payment method. Customers spend the assets they already hold. Merchants keep pricing and receiving payments in stablecoins.**
+PortPay turns supported tokenized assets on X Layer into spendable money. A merchant requests a USD₮0 amount, a customer pays from supported xStocks on X Layer, and the merchant receives USD₮0 on X Layer through one hosted invoice link. The buyer explicitly confirms wallet actions, and PortPay marks an invoice paid only after verifying canonical onchain settlement evidence.
+
+## Why X Layer
+
+X Layer is central to PortPay: its tokenized assets and onchain liquidity are the foundation for connecting portfolio holdings to merchant payments. The problem is simple: xStocks can be useful to hold or trade, but are not always straightforward to spend with a merchant. PortPay provides the checkout path: businesses request stablecoins, buyers choose a supported xStock, and merchants receive the requested USD₮0 on X Layer.
+
+**One invoice link. One clear payment path.** Payment still requires the buyer's explicit wallet confirmation; paid status depends on verified onchain settlement evidence.
 
 ## Current project status
 
