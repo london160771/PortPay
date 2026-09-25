@@ -67,6 +67,7 @@ import {
   readBuilderCodePayoutAddress,
 } from './config/builderCodes';
 import { hasExactMainnetAllowance, isSamePersistedMainnetPreparation, validatePreparedMainnetApproval } from './config/mainnetApproval';
+import { createMainnetPreparationRequestCoordinator } from './config/mainnetPreparationRequests';
 import {
   canOfferMainnetPay,
   clearMainnetSubmissionRecovery,
@@ -1241,6 +1242,12 @@ function formatMainnetPreparationCountdown(expiresAt: string, nowMs: number): st
   return `Expires in ${minutes}:${seconds}`;
 }
 
+function buyerFacingPreparationMessage(message: string): string {
+  return /\bokx\b|response envelope/i.test(message)
+    ? "We couldn't prepare this payment. Please try again."
+    : message;
+}
+
 function MainnetApprovalPanel({ invoice, onPaid }: { invoice: Invoice; onPaid: (invoice: Invoice) => void }) {
   const { address, chainId, isConnected } = useAccount();
   const { connect, error: connectError, isPending: isConnecting } = useConnect();
@@ -1257,6 +1264,12 @@ function MainnetApprovalPanel({ invoice, onPaid }: { invoice: Invoice; onPaid: (
   const [isPreparing, setIsPreparing] = useState(false);
   const [preparationError, setPreparationError] = useState('');
   const [selectedAssetKey, setSelectedAssetKey] = useState<MainnetAssetKey>('wNvda');
+  const [preparationRequests] = useState(() => createMainnetPreparationRequestCoordinator<MainnetApprovalPreparationResponse>());
+  const preparationContextKey = isConnected && address && chainId === xLayerMainnet.id && invoice.status === 'pending'
+    ? `${invoice.id}:${invoice.amountUsdt0}:${invoice.merchantAddress.toLowerCase()}:${address.toLowerCase()}:${chainId}:${selectedAssetKey}`
+    : null;
+  const preparationContextKeyRef = useRef(preparationContextKey);
+  preparationContextKeyRef.current = preparationContextKey;
   const [approvalTransactionHash, setApprovalTransactionHash] = useState<`0x${string}` | null>(null);
   const [approvalConfirmed, setApprovalConfirmed] = useState(false);
   const [payStage, setPayStage] = useState<'idle' | 'awaiting-approval' | 'confirming-approval' | 'rechecking' | 'wallet' | 'observing' | 'confirming' | 'error' | 'unresolved'>('idle');
@@ -1288,6 +1301,35 @@ function MainnetApprovalPanel({ invoice, onPaid }: { invoice: Invoice; onPaid: (
       setTransactionHash(attempt.transactionHash);
     }
   }, [address, invoice.id]);
+
+  const requestMainnetPreparation = useCallback((): Promise<MainnetApprovalPreparationResponse | null> => {
+    if (!isConnected || !address || chainId !== xLayerMainnet.id || invoice.status !== 'pending') return Promise.resolve(null);
+    const key = `${invoice.id}:${invoice.amountUsdt0}:${invoice.merchantAddress.toLowerCase()}:${address.toLowerCase()}:${chainId}:${selectedAssetKey}`;
+    const { ticket, isNew } = preparationRequests.run(
+      key,
+      () => prepareMainnetApproval(invoice.id, address, selectedAssetKey),
+    );
+    if (!isNew) return ticket.promise.catch(() => null);
+
+    setIsPreparing(true);
+    setPreparationError('');
+    return ticket.promise
+      .then((result) => {
+        if (!preparationRequests.isLatest(ticket) || preparationContextKeyRef.current !== key) return null;
+        acceptPreparationResult(result);
+        return result;
+      })
+      .catch((error: unknown) => {
+        if (preparationRequests.isLatest(ticket) && preparationContextKeyRef.current === key) {
+          setPreflight(null);
+          setPreparationError(error instanceof ApiError ? error.message : 'Unable to prepare the Mainnet payment.');
+        }
+        return null;
+      })
+      .finally(() => {
+        if (preparationRequests.isLatest(ticket) && preparationContextKeyRef.current === key) setIsPreparing(false);
+      });
+  }, [acceptPreparationResult, address, chainId, invoice.amountUsdt0, invoice.id, invoice.merchantAddress, invoice.status, isConnected, preparationRequests, selectedAssetKey]);
 
   const observeSameMainnetTransaction = useCallback(async (attempt: MainnetSubmissionRecovery, recoverFromServer: boolean) => {
     setPayError('');
@@ -1368,46 +1410,20 @@ function MainnetApprovalPanel({ invoice, onPaid }: { invoice: Invoice; onPaid: (
     setApprovalTransactionHash(null);
     setApprovalConfirmed(false);
     setPayError('');
-    setIsPreparing(true);
-    setPreparationError('');
-    try {
-      const result = await prepareMainnetApproval(invoice.id, address, selectedAssetKey);
-      acceptPreparationResult(result);
-      return result;
-    } catch (error) {
-      setPreflight(null);
-      setPreparationError(error instanceof ApiError ? error.message : 'Unable to prepare the Mainnet payment.');
-      return null;
-    } finally {
-      setIsPreparing(false);
-    }
+    return requestMainnetPreparation();
   }
 
   useEffect(() => {
-    let active = true;
-    if (preparationReachedReady.current) return () => { active = false; };
+    if (preparationReachedReady.current) return;
     if (!isConnected || !address || chainId !== xLayerMainnet.id || invoice.status !== 'pending') {
+      preparationRequests.invalidate();
+      setIsPreparing(false);
       setPreflight(null);
       setPreparationError('');
-      return () => { active = false; };
+      return;
     }
-    setIsPreparing(true);
-    setPreparationError('');
-    prepareMainnetApproval(invoice.id, address, selectedAssetKey)
-      .then((result) => {
-        if (active) {
-          acceptPreparationResult(result);
-        }
-      })
-      .catch((error: unknown) => {
-        if (active) {
-          setPreflight(null);
-          setPreparationError(error instanceof ApiError ? error.message : 'Unable to prepare the Mainnet payment.');
-        }
-      })
-      .finally(() => { if (active) setIsPreparing(false); });
-    return () => { active = false; };
-  }, [acceptPreparationResult, address, chainId, invoice.id, invoice.status, isConnected, selectedAssetKey]);
+    void requestMainnetPreparation();
+  }, [address, chainId, invoice.status, isConnected, preparationRequests, requestMainnetPreparation]);
 
   async function approvePreparedMainnet() {
     const preparation = preflight?.preparation;
@@ -1654,10 +1670,12 @@ function MainnetApprovalPanel({ invoice, onPaid }: { invoice: Invoice; onPaid: (
         <select
           className="mt-1.5 block w-full rounded-lg border border-ink/15 bg-white px-3 py-2 text-sm text-ink"
           value={selectedAssetKey}
-          disabled={isPaying || Boolean(preflight?.existingPayment) || Boolean(transactionHash)}
+          disabled={isPreparing || isPaying || Boolean(preflight?.existingPayment) || Boolean(transactionHash)}
           onChange={(event) => {
             const next = event.target.value as MainnetAssetKey;
             if (next === selectedAssetKey) return;
+            preparationRequests.invalidate();
+            setIsPreparing(false);
             preparationReachedReady.current = false;
             setPreflight(null);
             setPreparationError('');
@@ -1704,11 +1722,11 @@ function MainnetApprovalPanel({ invoice, onPaid }: { invoice: Invoice; onPaid: (
       ) : (
         <div className="mt-4">
           {isPreparing ? <p className="mainnet-processing-status rounded-xl bg-white p-4 text-sm text-ink/60">Preparing and validating the Mainnet payment…</p> : null}
-          {preparationError ? <p className="rounded-xl border border-rose-200 bg-rose-50 p-4 text-sm text-rose-800">{preparationError}</p> : null}
+          {preparationError ? <p className="rounded-xl border border-rose-200 bg-rose-50 p-4 text-sm text-rose-800">{buyerFacingPreparationMessage(preparationError)}</p> : null}
           {preflight && !isPreparing ? (
             <div className="mainnet-preflight-card rounded-xl border border-ink/10 bg-white p-4">
-              <p className="text-sm font-semibold">{preflight.status === 'READY' ? 'Ready for final payment recheck' : preflight.status === 'HANDOFF_UNRESOLVED' ? 'Payment status unresolved' : preflight.status === 'SUBMITTED' ? 'Transaction submitted' : preflight.status === 'APPROVAL_REQUIRED' ? 'Exact approval required' : 'Mainnet preflight blocked'}</p>
-              <p className="mt-1 text-sm leading-6 text-ink/60">{preflight.reason}</p>
+              <p className="text-sm font-semibold">{preflight.status === 'READY' ? 'Ready for final payment recheck' : preflight.status === 'HANDOFF_UNRESOLVED' ? 'Payment status unresolved' : preflight.status === 'SUBMITTED' ? 'Transaction submitted' : preflight.status === 'APPROVAL_REQUIRED' ? 'Exact approval required' : 'Payment setup failed'}</p>
+              <p className="mt-1 text-sm leading-6 text-ink/60">{buyerFacingPreparationMessage(preflight.reason)}</p>
               {preflight.preparation && preparedValidationError ? <p className="mt-3 text-sm text-rose-700">{preparedValidationError}</p> : null}
               {preflight.preparation && !preparedValidationError ? (
                 <dl className="mt-4 grid gap-2 text-xs sm:grid-cols-2">
@@ -1756,7 +1774,7 @@ function MainnetApprovalPanel({ invoice, onPaid }: { invoice: Invoice; onPaid: (
             </div>
           ) : null}
           {(preflight?.status !== 'READY' || readyPreparationNeedsRefresh) && !preflight?.existingPayment && !transactionHash && payStage !== 'unresolved' ? <button type="button" className="mt-3 text-sm font-semibold text-ink/60 underline underline-offset-4 disabled:opacity-50" onClick={() => void refreshPreparation()} disabled={isPreparing || isPaying || isWalletPromptOpen}>
-            {preflight ? 'Refresh mainnet preparation' : 'Retry mainnet preparation'}
+            Try again
           </button> : null}
         </div>
       )}
