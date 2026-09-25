@@ -139,7 +139,7 @@ export async function assertRegisteredBuilderCode(
   }
 }
 
-export function builderCodeTransactionData<T extends Record<string, unknown>>(request: T, code = portPayBuilderCode): T & { dataSuffix: Hex } {
+export function builderCodeTransactionData<const T extends Record<string, unknown>>(request: T, code = portPayBuilderCode): T & { dataSuffix: Hex } {
   const dataSuffix = toBuilderCodeDataSuffix(code);
   if (!dataSuffix) throw new Error('PortPay Builder Code is missing or malformed. Check VITE_PORTPAY_BUILDER_CODE.');
   return { ...request, dataSuffix };
