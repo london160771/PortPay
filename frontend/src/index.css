@@ -1114,3 +1114,133 @@ input:focus-visible {
     animation: none !important;
   }
 }
+
+/* Shared compact finish for buyer and merchant transaction receipts. */
+.payment-receipt--buyer,
+.payment-receipt--merchant {
+  margin-top: 1rem;
+  padding: 1rem;
+  border-radius: 0.75rem;
+  box-shadow: 0 5px 18px rgba(41, 58, 102, 0.045);
+}
+
+.payment-receipt--buyer .payment-receipt__title,
+.payment-receipt--merchant .payment-receipt__title {
+  margin-top: 0.2rem;
+  font-size: 1.08rem;
+  font-weight: 500;
+  line-height: 1.35;
+}
+
+.payment-receipt--buyer .payment-receipt__success-mark,
+.payment-receipt--merchant .payment-receipt__success-mark {
+  width: 1.65rem;
+  height: 1.65rem;
+  font-size: 0.78rem;
+  box-shadow: 0 2px 7px rgba(27, 161, 99, 0.12), 0 0 0 3px rgba(37, 183, 118, 0.06);
+}
+
+.payment-receipt--buyer .invoice-status-pill,
+.payment-receipt--merchant .invoice-status-pill {
+  padding: 0.16rem 0.45rem;
+  font-size: 0.63rem;
+  font-weight: 500;
+}
+
+.payment-receipt--buyer .payment-receipt__summary,
+.payment-receipt--merchant .payment-receipt__summary {
+  margin-top: 0.85rem;
+  gap: 0.7rem;
+  padding: 0.7rem 0.8rem;
+  border-radius: 0.65rem;
+}
+
+.payment-receipt--buyer .payment-receipt__summary p:first-child,
+.payment-receipt--merchant .payment-receipt__summary p:first-child {
+  font-size: 0.67rem;
+  font-weight: 400;
+  letter-spacing: 0.045em;
+}
+
+.payment-receipt--buyer .payment-receipt__summary p.text-3xl,
+.payment-receipt--merchant .payment-receipt__summary p.text-3xl {
+  font-size: 1.22rem;
+  font-weight: 500;
+  line-height: 1.35;
+}
+
+.payment-receipt--buyer .payment-receipt__summary p.text-lg,
+.payment-receipt--merchant .payment-receipt__summary p.text-lg {
+  font-size: 0.92rem;
+  font-weight: 500;
+}
+
+.payment-receipt--buyer > p,
+.payment-receipt--merchant > p {
+  margin-top: 0.7rem;
+  font-size: 0.76rem;
+  line-height: 1.45;
+}
+
+.payment-receipt--buyer dl,
+.payment-receipt--merchant dl {
+  margin-top: 0.75rem;
+  gap: 0.3rem 1rem;
+  padding-top: 0.65rem;
+  font-size: 0.76rem;
+}
+
+.payment-receipt--buyer dl > div,
+.payment-receipt--merchant dl > div {
+  padding-bottom: 0.42rem;
+  border-bottom: 1px solid #edf0f4;
+}
+
+.payment-receipt--buyer dt,
+.payment-receipt--merchant dt {
+  font-size: 0.67rem;
+  font-weight: 400;
+}
+
+.payment-receipt--buyer dd,
+.payment-receipt--merchant dd {
+  margin-top: 0.16rem;
+  font-size: 0.76rem;
+  font-weight: 500;
+  line-height: 1.4;
+}
+
+.payment-receipt--buyer dl + div,
+.payment-receipt--merchant dl + div {
+  margin-top: 0.7rem;
+  padding-top: 0.65rem;
+  font-size: 0.76rem;
+}
+
+.payment-receipt--buyer dl + div > p:first-child,
+.payment-receipt--merchant dl + div > p:first-child {
+  font-size: 0.67rem;
+  font-weight: 400;
+}
+
+.payment-receipt--buyer .portpay-button--receipt,
+.payment-receipt--merchant .portpay-button--receipt {
+  min-height: 1.9rem;
+  margin-top: 0.5rem;
+  border-radius: 0.5rem;
+  padding: 0.38rem 0.65rem;
+  font-size: 0.72rem;
+  font-weight: 500;
+}
+
+@media (max-width: 639px) {
+  .payment-receipt--buyer,
+  .payment-receipt--merchant {
+    padding: 0.8rem;
+  }
+
+  .payment-receipt--buyer .payment-receipt__summary p.text-3xl,
+  .payment-receipt--merchant .payment-receipt__summary p.text-3xl {
+    font-size: 1.16rem;
+  }
+}

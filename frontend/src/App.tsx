@@ -1231,9 +1231,20 @@ function BuyerWalletPanel({
   );
 }
 
+function formatMainnetPreparationCountdown(expiresAt: string, nowMs: number): string {
+  const expiryMs = Date.parse(expiresAt);
+  if (!Number.isFinite(expiryMs)) return 'Expiry unavailable';
+  const remainingSeconds = Math.max(0, Math.ceil((expiryMs - nowMs) / 1000));
+  if (remainingSeconds === 0) return 'Expired';
+  const minutes = Math.floor(remainingSeconds / 60);
+  const seconds = String(remainingSeconds % 60).padStart(2, '0');
+  return `Expires in ${minutes}:${seconds}`;
+}
+
 function MainnetApprovalPanel({ invoice, onPaid }: { invoice: Invoice; onPaid: (invoice: Invoice) => void }) {
   const { address, chainId, isConnected } = useAccount();
   const { connect, error: connectError, isPending: isConnecting } = useConnect();
+  const { disconnect } = useDisconnect();
   const { switchChain, error: switchError, isPending: isSwitching } = useSwitchChain();
   const { sendTransactionAsync, isPending: isWalletPromptOpen } = useSendTransaction();
   const { signMessageAsync, isPending: isHandoffSignatureOpen } = useSignMessage();
@@ -1242,6 +1253,7 @@ function MainnetApprovalPanel({ invoice, onPaid }: { invoice: Invoice; onPaid: (
   const [preflight, setPreflight] = useState<MainnetApprovalPreparationResponse | null>(
     submissionRecovery ? { status: 'SUBMITTED', reason: 'Resuming the same server-validated transaction; no new payment will be prepared.' } : null,
   );
+  const [preparationClockNow, setPreparationClockNow] = useState(() => Date.now());
   const [isPreparing, setIsPreparing] = useState(false);
   const [preparationError, setPreparationError] = useState('');
   const [selectedAssetKey, setSelectedAssetKey] = useState<MainnetAssetKey>('wNvda');
@@ -1252,6 +1264,11 @@ function MainnetApprovalPanel({ invoice, onPaid }: { invoice: Invoice; onPaid: (
   const [transactionHash, setTransactionHash] = useState<`0x${string}` | null>(submissionRecovery?.transactionHash ?? null);
   const preparationReachedReady = useRef(Boolean(submissionRecovery));
   const recoveryAttempted = useRef<string | null>(null);
+
+  useEffect(() => {
+    const timer = window.setInterval(() => setPreparationClockNow(Date.now()), 500);
+    return () => window.clearInterval(timer);
+  }, []);
 
   const isPaying = ['awaiting-approval', 'confirming-approval', 'rechecking', 'wallet', 'observing', 'confirming'].includes(payStage);
   const selectedAsset = selectedAssetKey === 'wNvda' ? mainnetAssets.wNvda : mainnetAssets.wAapl;
@@ -1612,6 +1629,12 @@ function MainnetApprovalPanel({ invoice, onPaid }: { invoice: Invoice; onPaid: (
         ? 'The persisted preparation does not match the xStock selected for this checkout.' : null)
     : 'A fresh preparation for the connected buyer is required.';
   const readyPreparationNeedsRefresh = readyMainnetPreparationNeedsRefresh(preflight);
+  const preparationNeedsRefresh = preflight?.preparation
+    ? mainnetPreparationNeedsRefresh(preflight.preparation.expiresAt, preparationClockNow, MAINNET_PRE_PROMPT_MIN_REMAINING_MS)
+    : false;
+  const preparationCountdown = preflight?.preparation
+    ? formatMainnetPreparationCountdown(preflight.preparation.expiresAt, preparationClockNow)
+    : null;
   const showPayButton = preflight?.status === 'READY' && Boolean(preflight.preparation) && !preflight.existingPayment
     && invoice.status === 'pending' && Boolean(address) && chainId === xLayerMainnet.id
     && !transactionHash && payStage === 'idle' && !readyPreparationNeedsRefresh;
@@ -1649,15 +1672,32 @@ function MainnetApprovalPanel({ invoice, onPaid }: { invoice: Invoice; onPaid: (
         </select>
       </label>
 
+      {isConnected && address ? (
+        <div className="mt-3 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-ink/10 bg-white px-3.5 py-3">
+          <div>
+            <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-ink/45">Connected wallet</p>
+            <p className="mt-0.5 font-mono text-xs text-ink/75">{shortenAddress(address)}</p>
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <span className={`rounded-full px-2.5 py-1 text-[10px] font-semibold ${chainId === xLayerMainnet.id ? 'bg-emerald-50 text-emerald-800' : 'bg-amber-50 text-amber-900'}`}>
+              {chainId === xLayerMainnet.id ? 'X Layer Mainnet · 196' : `Wrong network · ${chainId ?? 'unknown'}`}
+            </span>
+            <button type="button" className="rounded-lg border border-ink/15 px-3 py-1.5 text-xs font-semibold text-ink/70 transition hover:border-ink/30 hover:text-ink" onClick={() => disconnect()}>
+              Disconnect
+            </button>
+          </div>
+        </div>
+      ) : null}
+
       {!isConnected ? (
         <button type="button" className="portpay-button portpay-button--primary mt-5 rounded-xl bg-ink px-4 py-3 text-sm font-bold text-white disabled:opacity-50" onClick={() => connect({ connector: okxWalletConnector })} disabled={isConnecting}>
-          {isConnecting ? 'Opening OKX Wallet…' : 'Connect OKX Wallet'}
+          {isConnecting ? 'Opening OKX Wallet…' : 'Connect wallet'}
         </button>
       ) : chainId !== xLayerMainnet.id ? (
         <div className="mt-4 rounded-xl border border-amber-200 bg-white p-4">
           <p className="text-sm font-semibold">Switch to X Layer Mainnet (196) to continue.</p>
           <button type="button" className="mt-3 rounded-lg bg-amber-200 px-4 py-2.5 text-sm font-bold text-amber-950 disabled:opacity-50" onClick={() => switchChain({ chainId: xLayerMainnet.id })} disabled={isSwitching}>
-            {isSwitching ? 'Switching network…' : 'Switch to X Layer Mainnet'}
+            {isSwitching ? 'Switching network…' : 'Switch to X Layer'}
           </button>
           {switchError ? <p className="mt-2 text-xs text-rose-700">{switchError.message}</p> : null}
         </div>
@@ -1675,11 +1715,18 @@ function MainnetApprovalPanel({ invoice, onPaid }: { invoice: Invoice; onPaid: (
                   <div><dt className="text-ink/45">Asset / exact amount</dt><dd className="mt-0.5 font-semibold">{selectedAsset.label} · {formatUnits(BigInt(preflight.preparation.amount), 18)}</dd></div>
                   <div><dt className="text-ink/45">Minimum merchant receive</dt><dd className="mt-0.5 font-semibold">{formatUnits(BigInt(preflight.preparation.minimumReceive), 6)} USD₮0</dd></div>
                   <div><dt className="text-ink/45">Spender from prepared quote</dt><dd className="mt-0.5 break-all font-mono">{preflight.preparation.spender}</dd></div>
-                  <div><dt className="text-ink/45">Preparation expires</dt><dd className="mt-0.5">{new Date(preflight.preparation.expiresAt).toLocaleTimeString()}</dd></div>
+                  <div>
+                    <dt className="text-ink/45">Preparation expires</dt>
+                    <dd className="mt-0.5">{new Date(preflight.preparation.expiresAt).toLocaleTimeString()}</dd>
+                    <dd aria-live="off" className={`mt-1 font-medium ${preparationNeedsRefresh ? 'text-amber-700' : 'text-ink/70'}`}>
+                      {preparationCountdown}
+                      {preparationNeedsRefresh && preflight.status === 'APPROVAL_REQUIRED' ? ' · refresh before approval' : preparationNeedsRefresh && preflight.status === 'READY' ? ' · refresh before Pay' : ''}
+                    </dd>
+                  </div>
                   <div><dt className="text-ink/45">Preparation ID</dt><dd className="mt-0.5 break-all font-mono">{preflight.preparation.preparationId}</dd></div>
                 </dl>
               ) : null}
-              {preflight.status === 'APPROVAL_REQUIRED' && preflight.preparation && !preparedValidationError ? (
+              {preflight.status === 'APPROVAL_REQUIRED' && preflight.preparation && !preparedValidationError && !preparationNeedsRefresh ? (
                 <div className="mt-4 rounded-xl bg-amber-50 p-3 text-sm text-amber-950">
                   <p>The buyer wallet will be asked to approve exactly {formatUnits(BigInt(preflight.preparation.amount), 18)} {selectedAsset.label} for this invoice. No unlimited allowance is requested.</p>
                   <button type="button" className="portpay-button portpay-button--primary mt-3 rounded-lg bg-ink px-3.5 py-2.5 text-sm font-semibold text-white disabled:opacity-50" onClick={() => void approvePreparedMainnet()} disabled={isPaying || isWalletPromptOpen || isHandoffSignatureOpen || isPreparing}>
@@ -1687,6 +1734,7 @@ function MainnetApprovalPanel({ invoice, onPaid }: { invoice: Invoice; onPaid: (
                   </button>
                 </div>
               ) : null}
+              {preflight.status === 'APPROVAL_REQUIRED' && preparationNeedsRefresh ? <p className="mt-3 rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-900">This preparation is too close to expiry to approve safely. Refresh it before continuing.</p> : null}
               {approvalConfirmed ? <p className="mt-3 rounded-lg bg-emerald-50 px-3 py-2 text-sm text-emerald-800">Exact allowance confirmed. Pay is available only after the backend rechecks this same preparation.</p> : null}
               {approvalTransactionHash ? <p className="mt-2 text-xs text-ink/60">Approval transaction: <a className="font-mono underline" href={`${mainnetNetworkConfig.explorerUrl}/tx/${approvalTransactionHash}`} target="_blank" rel="noreferrer">{approvalTransactionHash}</a></p> : null}
               {showPayButton && preflight.preparation ? (
