@@ -353,7 +353,7 @@ npm run build
 npm run start
 ```
 
-The backend exposes the health route, Mainnet invoice API, isolated mainnet preparation/recheck/submission/reconciliation routes, and receipt/history queries. The chain-1952 quote/reconcile routes are registered only in test or explicitly enabled non-production development:
+The backend exposes the health route, Mainnet invoice API, isolated mainnet preparation/recheck/submission/reconciliation routes, and receipt/history queries. The public `GET /api/keepalive` route performs a read-only invoice lookup for an external scheduler and returns only database reachability. The chain-1952 quote/reconcile routes are registered only in test or explicitly enabled non-production development:
 
 - `POST /api/invoices` with `{ "title", "amountUsdt0", "merchantAddress" }` creates a pending invoice.
 - `GET /api/invoices?merchantAddress=<wallet>` lists invoices for the connected merchant wallet.

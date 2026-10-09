@@ -34,6 +34,7 @@ describe('backend routes', () => {
     const routes = expressApp.router?.stack ?? expressApp._router?.stack ?? [];
     const paths = routes.flatMap((layer) => (layer.route?.path ? [layer.route.path] : []));
     expect(paths).toContain('/health');
+    expect(paths).toContain('/api/keepalive');
     expect(paths).toContain('/api/invoices');
     expect(paths).toContain('/api/invoices/:invoiceId');
     expect(paths).toContain('/api/invoices/:invoiceId/quote');
@@ -47,6 +48,40 @@ describe('backend routes', () => {
     expect(paths).toContain('/api/history/buyer');
     expect(paths).toContain('/api/integration/invoices');
     expect(paths).toContain('/api/integration/invoices/:invoiceId/status');
+  });
+
+  it('returns only database reachability after a successful keepalive read', async () => {
+    const repository = new InMemoryInvoiceRepository();
+    const findById = vi.spyOn(repository, 'findById');
+    const app = createApp(repository);
+
+    await withServer(app, async (baseUrl) => {
+      const response = await fetch(`${baseUrl}/api/keepalive`);
+      expect(response.status).toBe(200);
+      expect(await response.json()).toEqual({ status: 'ok', database: 'reachable' });
+    });
+
+    expect(findById).toHaveBeenCalledExactlyOnceWith('00000000-0000-0000-0000-000000000000');
+  });
+
+  it('returns a sanitized 503 when the keepalive repository read fails', async () => {
+    const repository = new InMemoryInvoiceRepository();
+    const findById = vi.spyOn(repository, 'findById').mockRejectedValue(
+      new Error('SUPABASE_URL=https://internal.example invoice row details'),
+    );
+    const app = createApp(repository);
+
+    await withServer(app, async (baseUrl) => {
+      const response = await fetch(`${baseUrl}/api/keepalive`);
+      const body = await response.json();
+      expect(response.status).toBe(503);
+      expect(body).toEqual({ status: 'error', database: 'unreachable' });
+      expect(JSON.stringify(body)).not.toContain('SUPABASE_URL');
+      expect(JSON.stringify(body)).not.toContain('internal.example');
+      expect(JSON.stringify(body)).not.toContain('invoice row details');
+    });
+
+    expect(findById).toHaveBeenCalledExactlyOnceWith('00000000-0000-0000-0000-000000000000');
   });
 
   it('keeps testnet settlement routes and invoice selection unavailable in production', async () => {

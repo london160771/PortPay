@@ -112,6 +112,15 @@ export function createApp(
     });
   });
 
+  app.get('/api/keepalive', async (_request, response) => {
+    try {
+      await invoiceRepository.findById('00000000-0000-0000-0000-000000000000');
+      response.json({ status: 'ok', database: 'reachable' });
+    } catch {
+      response.status(503).json({ status: 'error', database: 'unreachable' });
+    }
+  });
+
   app.post('/api/invoices', async (request, response, next) => {
     try {
       const body = request.body && typeof request.body === 'object' ? request.body : {};
